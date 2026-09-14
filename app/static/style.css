@@ -230,8 +230,8 @@ h2 { font-size: 18px; margin-bottom: 8px; }
 .leg-side.side-under { background: rgba(96, 165, 250, 0.16); color: var(--accent2); }
 .leg-headline { font-size: 15px; font-weight: 700; color: var(--text); overflow-wrap: anywhere; }
 .leg-headline .stat { font-weight: 500; color: var(--muted); }
+.leg-odds-wrap { flex-shrink: 0; display: flex; align-items: flex-start; gap: 6px; }
 .leg-odds {
-  flex-shrink: 0;
   text-align: right;
   font-size: 13px;
   font-weight: 700;
@@ -245,6 +245,24 @@ h2 { font-size: 18px; margin-bottom: 8px; }
   color: var(--muted);
   margin-top: 1px;
 }
+.redo-btn {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.redo-btn:hover { color: var(--text); border-color: var(--accent2); background: rgba(96, 165, 250, 0.12); }
+.redo-btn:disabled { opacity: 0.5; cursor: default; }
 
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }

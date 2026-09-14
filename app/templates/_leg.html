@@ -1,0 +1,36 @@
+{% macro render_leg(leg, show_matchup=False) %}
+  <li class="leg-item"
+      data-player="{{ leg.player or '' }}"
+      data-stat-category="{{ leg.stat_category or '' }}"
+      data-market="{{ leg.market or '' }}"
+      data-selection="{{ leg.selection or '' }}"
+      data-matchup="{{ leg.matchup or '' }}"
+      data-decimal-odds="{{ leg.decimal_odds }}"
+      data-model-prob="{{ leg.model_prob }}">
+    {% if show_matchup %}<div class="leg-matchup">{{ leg.matchup }}</div>{% endif %}
+    <div class="leg-row">
+      <div class="leg-main">
+        {% if leg.player %}
+          {% if leg.side %}<span class="leg-side {% if leg.side == 'Over' %}side-over{% elif leg.side == 'Under' %}side-under{% endif %}">{{ leg.side }}</span>{% endif %}
+          <span class="leg-headline">{{ leg.player }} <span class="stat">{{ leg.line }} {{ leg.stat_label }}</span></span>
+        {% else %}
+          <span class="leg-headline">{{ leg.market }} <span class="stat">{{ leg.selection }}</span></span>
+        {% endif %}
+      </div>
+      <div class="leg-odds-wrap">
+        <button type="button" class="redo-btn" title="Swap this leg for a different one">↻</button>
+        <div class="leg-odds">{{ '%+d'|format(leg.american_odds) }}<span class="book">{{ leg.bookmaker }}</span></div>
+      </div>
+    </div>
+    {% if leg.injury_note or leg.stale_data_note or leg.return_risk_note or leg.qb_out_note or leg.weather_note or leg.expert_note %}
+    <div class="leg-notes">
+      {% if leg.injury_note %}<div class="leg-note {% if leg.injury_flag == 'info' %}tone-info{% else %}tone-warn{% endif %}">{{ 'ℹ️' if leg.injury_flag == 'info' else '⚠️' }} {{ leg.injury_note }}</div>{% endif %}
+      {% if leg.stale_data_note %}<div class="leg-note tone-info">ℹ️ {{ leg.stale_data_note }}</div>{% endif %}
+      {% if leg.return_risk_note %}<div class="leg-note tone-warn">⚕️ {{ leg.return_risk_note }}</div>{% endif %}
+      {% if leg.qb_out_note %}<div class="leg-note tone-warn">🏈 {{ leg.qb_out_note }}</div>{% endif %}
+      {% if leg.weather_note %}<div class="leg-note tone-info">🌦️ {{ leg.weather_note }}</div>{% endif %}
+      {% if leg.expert_note %}<div class="leg-note tone-{{ leg.expert_sentiment or 'neutral' }}">🧠 {{ leg.expert_sentiment|capitalize if leg.expert_sentiment and leg.expert_sentiment != 'no_data' else 'Expert take' }}: {{ leg.expert_note }}</div>{% endif %}
+    </div>
+    {% endif %}
+  </li>
+{% endmacro %}

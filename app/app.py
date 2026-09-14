@@ -90,6 +90,76 @@ def track_record():
     return render_template("track_record.html", record=tracking.get_track_record())
 
 
+def _leg_signature(d):
+    """Identifies 'the same underlying bet' for exclude/dedup purposes: a
+    player prop is keyed by (player, stat category) regardless of line/side,
+    a game-level bet by its market -- a matchup only has one live
+    spread/total/moneyline market at a time, so that's specific enough."""
+    player = d.get("player")
+    if player:
+        return ("prop", player, d.get("stat_category"))
+    return ("game", d.get("market"))
+
+
+@app.route("/api/redo-leg", methods=["POST"])
+def redo_leg():
+    """Swaps one leg of an already-built parlay for a different, still-live
+    candidate from the same game -- e.g. a receiver's odd rushing-yards prop
+    for one of his receiving props instead. Recomputes nothing about the rest
+    of the parlay server-side; the client re-derives payout/odds/probability
+    from every leg's own decimal odds and model probability after the swap."""
+    data = request.get_json(silent=True) or {}
+    matchup = data.get("matchup")
+    current = data.get("current") or {}
+    exclude = data.get("exclude") or []
+    show_matchup = bool(data.get("show_matchup"))
+
+    if not matchup:
+        return jsonify({"error": "Missing matchup."}), 400
+
+    try:
+        _value_bets, pool, meta = value_finder.get_value_bets_and_pool()
+    except Exception as e:
+        return jsonify({"error": f"Couldn't refresh live data: {e}"}), 500
+
+    if meta.get("error"):
+        return jsonify({"error": meta["error"]}), 400
+
+    game_legs = [l for l in pool if l["matchup"] == matchup]
+    excluded = {_leg_signature(e) for e in exclude}
+    excluded.add(_leg_signature(current))
+
+    player = current.get("player")
+    if player:
+        search_order = [
+            [l for l in game_legs if l.get("player") == player],
+            [l for l in game_legs if l.get("player") and l.get("player") != player],
+            [l for l in game_legs if not l.get("player")],
+        ]
+    else:
+        search_order = [
+            [l for l in game_legs if not l.get("player")],
+            [l for l in game_legs if l.get("player")],
+        ]
+
+    def score(leg):
+        return leg["edge"] - 0.05 * leg.get("category_cv", 0.5)
+
+    candidate = None
+    for group in search_order:
+        options = [l for l in group if _leg_signature(l) not in excluded]
+        if options:
+            candidate = max(options, key=score)
+            break
+
+    if candidate is None:
+        return jsonify({"error": "No alternative leg available for this game right now."}), 404
+
+    template = app.jinja_env.get_template("_leg.html")
+    html = template.module.render_leg(candidate, show_matchup=show_matchup)
+    return jsonify({"leg": candidate, "html": str(html)})
+
+
 @app.route("/api/refresh")
 def api_refresh():
     stake = request.args.get("stake", type=float) or DEFAULT_STAKE
