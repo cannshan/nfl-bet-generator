@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NFL Bet Generator</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+{% macro render_leg(leg, show_matchup=False) %}
+  <li>
+    {% if show_matchup %}<div class="leg-matchup">{{ leg.matchup }}</div>{% endif %}
+    <div class="leg-row">
+      <div class="leg-main">
+        {% if leg.player %}
+          {% if leg.side %}<span class="leg-side {% if leg.side == 'Over' %}side-over{% elif leg.side == 'Under' %}side-under{% endif %}">{{ leg.side }}</span>{% endif %}
+          <span class="leg-headline">{{ leg.player }} <span class="stat">{{ leg.line }} {{ leg.stat_label }}</span></span>
+        {% else %}
+          <span class="leg-headline">{{ leg.market }} <span class="stat">{{ leg.selection }}</span></span>
+        {% endif %}
+      </div>
+      <div class="leg-odds">{{ '%+d'|format(leg.american_odds) }}<span class="book">{{ leg.bookmaker }}</span></div>
+    </div>
+    {% if leg.injury_note or leg.stale_data_note or leg.return_risk_note or leg.qb_out_note or leg.weather_note or leg.expert_note %}
+    <div class="leg-notes">
+      {% if leg.injury_note %}<div class="leg-note {% if leg.injury_flag == 'info' %}tone-info{% else %}tone-warn{% endif %}">{{ 'ℹ️' if leg.injury_flag == 'info' else '⚠️' }} {{ leg.injury_note }}</div>{% endif %}
+      {% if leg.stale_data_note %}<div class="leg-note tone-info">ℹ️ {{ leg.stale_data_note }}</div>{% endif %}
+      {% if leg.return_risk_note %}<div class="leg-note tone-warn">⚕️ {{ leg.return_risk_note }}</div>{% endif %}
+      {% if leg.qb_out_note %}<div class="leg-note tone-warn">🏈 {{ leg.qb_out_note }}</div>{% endif %}
+      {% if leg.weather_note %}<div class="leg-note tone-info">🌦️ {{ leg.weather_note }}</div>{% endif %}
+      {% if leg.expert_note %}<div class="leg-note tone-{{ leg.expert_sentiment or 'neutral' }}">🧠 {{ leg.expert_sentiment|capitalize if leg.expert_sentiment and leg.expert_sentiment != 'no_data' else 'Expert take' }}: {{ leg.expert_note }}</div>{% endif %}
+    </div>
+    {% endif %}
+  </li>
+{% endmacro %}
+
+  <header>
+    <h1>🏈 NFL Bet Generator</h1>
+    <nav class="tabs">
+      <a href="/" class="tab active">Bets</a>
+      <a href="/track-record" class="tab">Track Record</a>
+    </nav>
+  </header>
+
+  {% if offensive_injuries %}
+  <details class="injuries-details">
+    <summary>🏥 Offensive injury report ({{ offensive_injuries|length }} players) — click to expand</summary>
+    <div class="injuries-table-wrap">
+      <table id="injuries-table" class="injuries-table">
+        <thead>
+          <tr>
+            <th data-sort>Position</th>
+            <th data-sort>Team</th>
+            <th data-sort>Player</th>
+            <th data-sort>Status</th>
+            <th>Note</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for inj in offensive_injuries %}
+          <tr>
+            <td>{{ inj.position }}</td>
+            <td>{{ inj.team }}</td>
+            <td>{{ inj.player }}</td>
+            <td>{{ inj.status }}</td>
+            <td>{{ inj.comment }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+  <script>
+    (function () {
+      var table = document.getElementById('injuries-table');
+      if (!table) return;
+      var lastKey = null, ascending = true;
+      table.querySelectorAll('thead th[data-sort]').forEach(function (th) {
+        th.addEventListener('click', function () {
+          var idx = th.cellIndex;
+          ascending = lastKey === idx ? !ascending : true;
+          lastKey = idx;
+          var tbody = table.querySelector('tbody');
+          var rows = Array.prototype.slice.call(tbody.querySelectorAll('tr'));
+          rows.sort(function (a, b) {
+            var av = a.children[idx].textContent.trim().toLowerCase();
+            var bv = b.children[idx].textContent.trim().toLowerCase();
+            if (av < bv) return ascending ? -1 : 1;
+            if (av > bv) return ascending ? 1 : -1;
+            return 0;
+          });
+          rows.forEach(function (r) { tbody.appendChild(r); });
+        });
+      });
+    })();
+  </script>
+  {% endif %}
+
+  <form class="controls" method="get">
+    <label>Stake ($)
+      <input type="number" name="stake" step="0.5" value="{{ stake }}">
+    </label>
+    <label>Target payout ($)
+      <input type="number" name="target" step="10" value="{{ target }}">
+    </label>
+    <label class="checkbox-label">
+      <input type="checkbox" name="props" value="1" {% if include_props %}checked{% endif %}>
+      Include player props
+    </label>
+    <input type="hidden" name="props" value="0" style="display:none">
+    {% if insight_configured %}
+      <label class="checkbox-label">
+        <input type="checkbox" name="insight" value="1" {% if include_insight %}checked{% endif %}>
+        Include expert insight
+      </label>
+      <input type="hidden" name="insight" value="0" style="display:none">
+    {% endif %}
+    <button type="submit">Refresh</button>
+  </form>
+
+  {% if error %}
+    <div class="error">
+      <strong>Couldn't load live data:</strong> {{ error }}
+      <p>If this mentions an API key, get a free one at
+        <a href="https://the-odds-api.com" target="_blank">the-odds-api.com</a>
+        and put it in your <code>.env</code> file as <code>ODDS_API_KEY</code>.</p>
+    </div>
+  {% endif %}
+
+  {% set prop_cards = game_cards|selectattr('has_props')|list %}
+  {% set fallback_cards = game_cards|rejectattr('has_props')|list %}
+
+  {% if prop_cards %}
+  <section>
+    <h2>Same Game Parlays</h2>
+    <p class="meta">
+      One combo per game of the week that has player props live, built mostly from that game's
+      props, searched for the payout closest to your target with the best achievable hit chance.
+    </p>
+    <div class="parlay-grid">
+      {% for card in prop_cards %}
+      <div class="parlay-card">
+        <div class="card-header">
+          <div class="card-title-wrap">
+            <h3 class="card-title">{{ card.matchup }}</h3>
+            {% if card.kickoff_et %}<div class="kickoff">{{ card.kickoff_et }}</div>{% endif %}
+          </div>
+          <div class="payout-badge">
+            <span class="payout">${{ card.payout }}</span>
+            <span class="prob">{{ (card.combined_prob * 100)|round(2) }}% if independent</span>
+          </div>
+        </div>
+        <div class="odds-line">
+          {{ card.num_legs }} legs · {{ '%+d'|format(card.american_equivalent) }} combined odds
+          {% if not card.hit_target %}· closest available, below target{% endif %}
+        </div>
+        <ul>
+          {% for leg in card.legs %}
+            {{ render_leg(leg) }}
+          {% endfor %}
+        </ul>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% elif not error %}
+    <p class="meta">No Same Game Parlays yet — no game has player props live. Check back closer to kickoff as sportsbooks post them.</p>
+  {% endif %}
+
+  {% if best_odds_parlays %}
+  <section>
+    <h2>Statistically Best Bets (${{ stake }} → ~${{ target|round(0) }})</h2>
+    <p class="meta">
+      No restriction on which games a leg comes from — this picks whatever combination of props
+      and lines gives the highest real hit chance at a payout near your target, using every signal
+      the model has. When a combo happens to include more than one leg from the same game, that's
+      flagged below — the combined probability for those is an estimate, same as a Same Game Parlay,
+      since those legs aren't actually independent.
+    </p>
+    <div class="parlay-grid">
+      {% for p in best_odds_parlays %}
+      <div class="parlay-card">
+        <div class="card-header">
+          <div class="card-title-wrap">
+            <h3 class="card-title">{{ p.num_legs }}-Leg Parlay</h3>
+          </div>
+          <div class="payout-badge">
+            <span class="payout">${{ p.payout }}</span>
+            <span class="prob">{{ (p.combined_prob * 100)|round(2) }}% {% if p.has_same_game_legs %}est.{% else %}real{% endif %}</span>
+          </div>
+        </div>
+        <div class="odds-line">
+          {{ '%+d'|format(p.american_equivalent) }} combined odds
+          {% if p.has_same_game_legs %}· includes same-game legs, illustrative{% endif %}
+        </div>
+        <ul>
+          {% for leg in p.legs %}
+            {{ render_leg(leg, show_matchup=True) }}
+          {% endfor %}
+        </ul>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% if fallback_cards %}
+  <section>
+    <h2>Other games — props not posted yet</h2>
+    <p class="meta">
+      These games don't have player props live yet, so there aren't enough legs to approach your
+      target payout — shown here for reference as a smaller spread/total combo instead.
+    </p>
+    <table>
+      <thead>
+        <tr><th>Matchup</th><th>Kickoff (ET)</th><th>Combo</th><th>Odds</th><th>Payout</th><th>If independent</th></tr>
+      </thead>
+      <tbody>
+        {% for card in fallback_cards %}
+        <tr>
+          <td>{{ card.matchup }}</td>
+          <td>{{ card.kickoff_et or '—' }}</td>
+          <td>{% for leg in card.legs %}{{ leg.market }}: {{ leg.selection }}{% if not loop.last %} + {% endif %}{% endfor %}</td>
+          <td>{{ '%+d'|format(card.american_equivalent) }}</td>
+          <td>${{ card.payout }}</td>
+          <td>{{ (card.combined_prob * 100)|round(1) }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+
+  <footer>
+    Data: live odds from The Odds API, historical scores/schedule from ESPN's public API.
+    Model: opponent-adjusted power ratings from real scoring margins, converted to probabilities
+    via a normal-distribution margin model. Built for informational/entertainment purposes only.
+  </footer>
+</body>
+</html>

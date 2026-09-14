@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NFL Bet Generator</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header>
+    <h1>🏈 NFL Bet Generator</h1>
+    <nav class="tabs">
+      <a href="/" class="tab">Bets</a>
+      <a href="/track-record" class="tab active">Track Record</a>
+    </nav>
+  </header>
+
+  <section class="disclaimer">
+    ⚠️ Every bet this app suggests gets logged automatically the moment it's shown, and settled
+    automatically once the real game result is available — nothing to do on your end. This page is
+    the honest answer to "does this actually work": does a bet called 70% likely actually hit
+    around 70% of the time? Results accumulate over time as games are played.
+  </section>
+
+  <section class="stat-row">
+    <div class="stat-tile">
+      <div class="stat-value">{{ record.total_settled }}</div>
+      <div class="stat-label">Settled bets</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-value">{{ record.pending }}</div>
+      <div class="stat-label">Pending (game not played yet)</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-value">{% if record.overall_hit_rate is not none %}{{ (record.overall_hit_rate * 100)|round(1) }}%{% else %}—{% endif %}</div>
+      <div class="stat-label">Overall hit rate</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-value">{% if record.roi_pct is not none %}{{ record.roi_pct|round(1) }}%{% else %}—{% endif %}</div>
+      <div class="stat-label">ROI (${{ record.stake }}/leg, straight)</div>
+    </div>
+  </section>
+
+  {% if not record.confident %}
+    <p class="meta">
+      ⚠️ Only {{ record.total_settled }} bets settled so far — way too small a sample to mean
+      anything yet. Both the hit rate and ROI above are close to meaningless with this little data;
+      check back after more games have been played. (Void/push bets: {{ record.void }}, not counted above.)
+    </p>
+  {% endif %}
+
+  {% if record.buckets %}
+  <section>
+    <h2>Calibration: does a "70% pick" actually hit 70% of the time?</h2>
+    <p class="meta">
+      For each range of predicted probability, this compares what the model said against what
+      actually happened. A well-calibrated model has "actual hit rate" close to "avg predicted" in
+      every row — if actual is consistently lower, the model is overconfident in that range; higher,
+      underconfident.
+    </p>
+    <table>
+      <thead>
+        <tr><th>Predicted range</th><th>Avg predicted</th><th>Actual hit rate</th><th>Sample size</th></tr>
+      </thead>
+      <tbody>
+        {% for b in record.buckets %}
+        <tr>
+          <td>{{ b.range }}</td>
+          <td>{{ (b.predicted_avg * 100)|round(1) }}%</td>
+          <td class="{% if b.actual_hit_rate + 0.05 < b.predicted_avg %}edge-cell-bad{% elif b.actual_hit_rate - 0.05 > b.predicted_avg %}edge-cell{% endif %}">
+            {{ (b.actual_hit_rate * 100)|round(1) }}%
+          </td>
+          <td>{{ b.n }}{% if b.n < 10 %} (too few to trust){% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+
+  {% if record.recent %}
+  <section>
+    <h2>Recently settled</h2>
+    <table>
+      <thead>
+        <tr><th>Matchup</th><th>Pick</th><th>Predicted</th><th>Result</th></tr>
+      </thead>
+      <tbody>
+        {% for r in record.recent %}
+        <tr>
+          <td>{{ r.away_team }} @ {{ r.home_team }}</td>
+          <td>{{ r.market }}: {{ r.selection }}</td>
+          <td>{{ (r.model_prob * 100)|round(1) }}%</td>
+          <td class="{% if r.status == 'hit' %}edge-cell{% elif r.status == 'miss' %}edge-cell-bad{% endif %}">
+            {{ r.status|capitalize }}{% if r.actual_value is not none %} ({{ r.actual_value }}){% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% elif record.total_settled == 0 %}
+    <p class="meta">No bets settled yet — check back after this week's games have been played.</p>
+  {% endif %}
+
+  <footer>
+    Settlement uses ESPN's final scores (game-level bets) and nflverse's final box-score stats
+    (player props), checked automatically starting a few hours after kickoff. A bet with no data
+    available yet stays "pending" and is retried on your next visit.
+  </footer>
+</body>
+</html>

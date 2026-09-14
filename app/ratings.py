@@ -1,0 +1,94 @@
+"""Simple opponent-adjusted power ratings (Massey-style) built from scoring margins,
+plus normal-distribution win/cover/total probability conversions.
+
+This is a transparent, lightweight statistical model -- not a guarantee of anything.
+It gives a data-driven estimate of "fair" probability to compare against the
+sportsbook's price, so we can flag where the book's line looks softest.
+"""
+import math
+from collections import defaultdict
+
+HOME_FIELD_ADV = 1.5   # points, modest modern-NFL home edge
+MARGIN_SIGMA = 13.0    # stddev of NFL game margins, used for win-prob conversion
+TOTAL_SIGMA = 10.0     # stddev of combined-score totals
+
+
+def compute_power_ratings(weighted_games, iterations=25):
+    """weighted_games: list of (home, away, home_score, away_score, weight).
+    Returns {team: rating} where rating is point strength relative to league average.
+    """
+    teams = set()
+    for home, away, *_ in weighted_games:
+        teams.add(home)
+        teams.add(away)
+    ratings = {t: 0.0 for t in teams}
+
+    for _ in range(iterations):
+        sums = defaultdict(float)
+        weights = defaultdict(float)
+        for home, away, hs, as_, w in weighted_games:
+            home_margin = (hs - as_) - HOME_FIELD_ADV
+            away_margin = -home_margin
+            sums[home] += w * (home_margin + ratings[away])
+            weights[home] += w
+            sums[away] += w * (away_margin + ratings[home])
+            weights[away] += w
+        new_ratings = {}
+        for t in teams:
+            new_ratings[t] = sums[t] / weights[t] if weights[t] > 0 else 0.0
+        mean_r = sum(new_ratings.values()) / len(new_ratings) if new_ratings else 0.0
+        ratings = {t: v - mean_r for t, v in new_ratings.items()}
+
+    return ratings
+
+
+def compute_scoring_averages(weighted_games):
+    """Returns {team: {"pf": avg points for, "pa": avg points against}} using weighted average."""
+    pf_sum = defaultdict(float)
+    pa_sum = defaultdict(float)
+    w_sum = defaultdict(float)
+    for home, away, hs, as_, w in weighted_games:
+        pf_sum[home] += hs * w
+        pa_sum[home] += as_ * w
+        w_sum[home] += w
+        pf_sum[away] += as_ * w
+        pa_sum[away] += hs * w
+        w_sum[away] += w
+    out = {}
+    for t in w_sum:
+        out[t] = {
+            "pf": pf_sum[t] / w_sum[t] if w_sum[t] else 21.0,
+            "pa": pa_sum[t] / w_sum[t] if w_sum[t] else 21.0,
+        }
+    return out
+
+
+def normal_cdf(x):
+    return 0.5 * (1 + math.erf(x / math.sqrt(2)))
+
+
+def win_probability(home_rating, away_rating, home_field=HOME_FIELD_ADV, sigma=MARGIN_SIGMA):
+    """P(home team wins outright)."""
+    predicted_margin = (home_rating - away_rating) + home_field
+    return normal_cdf(predicted_margin / sigma)
+
+
+def predicted_margin(home_rating, away_rating, home_field=HOME_FIELD_ADV):
+    return (home_rating - away_rating) + home_field
+
+
+def cover_probability(predicted_margin_value, spread_for_home, sigma=MARGIN_SIGMA):
+    """P(home team covers a given spread). spread_for_home is the number as posted
+    for the home side, e.g. -3.5 means home is favored by 3.5.
+    Home covers if actual_margin > -spread_for_home.
+    """
+    threshold = -spread_for_home
+    z = (predicted_margin_value - threshold) / sigma
+    return normal_cdf(z)
+
+
+def total_probability(predicted_total, line, sigma=TOTAL_SIGMA):
+    """Returns (p_over, p_under) for a given total line."""
+    z = (predicted_total - line) / sigma
+    p_under = normal_cdf(z)
+    return 1 - p_under, p_under
