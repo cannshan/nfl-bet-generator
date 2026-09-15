@@ -10,7 +10,11 @@ from collections import defaultdict
 
 HOME_FIELD_ADV = 1.5   # points, modest modern-NFL home edge
 MARGIN_SIGMA = 13.0    # stddev of NFL game margins, used for win-prob conversion
-TOTAL_SIGMA = 10.0     # stddev of combined-score totals
+# Backtested against 544 real games across the 2024-2025 seasons (walk-forward,
+# no lookahead): actual std dev of (final total - predicted total) came out to
+# ~13.25, well above the 10.0 originally assumed here -- that made total-line
+# probabilities meaningfully overconfident in both directions. Raised to match.
+TOTAL_SIGMA = 13.0     # stddev of combined-score totals
 
 
 def compute_power_ratings(weighted_games, iterations=25):
