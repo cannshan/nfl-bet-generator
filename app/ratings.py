@@ -16,6 +16,47 @@ MARGIN_SIGMA = 13.0    # stddev of NFL game margins, used for win-prob conversio
 # probabilities meaningfully overconfident in both directions. Raised to match.
 TOTAL_SIGMA = 13.0     # stddev of combined-score totals
 
+# Win-probability recalibration, fit via isotonic regression (Pool Adjacent
+# Violators) against 2,634 real games across the 2016-2025 seasons
+# (walk-forward, no lookahead -- ratings recomputed from only prior games each
+# week). The raw normal-CDF win_probability() is honest up to ~65-70%, but
+# gets meaningfully overconfident above that: a raw 93.9% average prediction
+# actually won only ~75.3% of the time. Isotonic regression was used
+# specifically because it's monotonic by construction -- earlier attempts at
+# a logistic (Platt-scaling) correction produced unstable/inverted curves on
+# noisier subsets of this data, which isotonic regression can't do. Each pair
+# is (raw favored-side probability, calibrated favored-side probability);
+# WIN_PROB_CALIBRATION[-1] effectively caps real-world confidence at ~75%
+# no matter how lopsided the raw rating gap looks. Applies only to
+# win_probability() (Moneyline) -- cover_probability/total_probability
+# weren't shown to have this specific issue and are untouched.
+WIN_PROB_CALIBRATION = [
+    (0.500, 0.500),
+    (0.587, 0.569),
+    (0.688, 0.626),
+    (0.758, 0.697),
+    (0.849, 0.706),
+    (0.887, 0.722),
+    (0.939, 0.753),
+    (1.000, 0.753),
+]
+
+
+def _interp(x, breakpoints):
+    for (x0, y0), (x1, y1) in zip(breakpoints, breakpoints[1:]):
+        if x0 <= x <= x1:
+            if x1 == x0:
+                return y0
+            t = (x - x0) / (x1 - x0)
+            return y0 + t * (y1 - y0)
+    return breakpoints[-1][1]
+
+
+def _calibrate_win_prob(raw_p):
+    favored = max(raw_p, 1 - raw_p)
+    calibrated_favored = _interp(favored, WIN_PROB_CALIBRATION)
+    return calibrated_favored if raw_p >= 0.5 else 1 - calibrated_favored
+
 
 def compute_power_ratings(weighted_games, iterations=25):
     """weighted_games: list of (home, away, home_score, away_score, weight).
@@ -72,9 +113,11 @@ def normal_cdf(x):
 
 
 def win_probability(home_rating, away_rating, home_field=HOME_FIELD_ADV, sigma=MARGIN_SIGMA):
-    """P(home team wins outright)."""
+    """P(home team wins outright), recalibrated against real historical
+    outcomes -- see WIN_PROB_CALIBRATION above."""
     predicted_margin = (home_rating - away_rating) + home_field
-    return normal_cdf(predicted_margin / sigma)
+    raw_p = normal_cdf(predicted_margin / sigma)
+    return _calibrate_win_prob(raw_p)
 
 
 def predicted_margin(home_rating, away_rating, home_field=HOME_FIELD_ADV):
