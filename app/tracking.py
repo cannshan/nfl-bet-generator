@@ -11,16 +11,23 @@ auto-recalibration) -- with only a handful of settled bets at first, any
 now is the honest calibration report: does a bet this app called 70% likely
 actually hit around 70% of the time? That's the number no amount of clever
 feature engineering can fake.
+
+Also tracks closing line value (CLV) -- whether the suggested price beat the
+market's own closing number -- since that's a faster, sharp-betting-standard
+skill signal that doesn't need to wait for a game's outcome, just for the
+line to move. See capture_closing_lines().
 """
 import datetime as dt
 import re
 import sqlite3
+from collections import defaultdict
 from app.config import PREDICTIONS_DB_PATH
 from app import espn_client, nflverse_client
 
 SETTLEMENT_DELAY_HOURS = 4  # wait this long past kickoff so final stats have posted
 CALIBRATION_BUCKETS = [(0.5, 0.6), (0.6, 0.7), (0.7, 0.8), (0.8, 0.9), (0.9, 1.01)]
 MIN_SAMPLE_FOR_CONFIDENCE = 20  # below this, don't imply the numbers mean much yet
+MIN_SAMPLE_FOR_CLV_CONFIDENCE = 200  # sharp-betting convention: CLV needs a bigger sample than raw hit rate to mean much
 
 
 def _connect():
@@ -56,6 +63,19 @@ def _connect():
         )
         """
     )
+    # Added after the table already existed in the wild -- ALTER TABLE rather
+    # than baking into CREATE TABLE so existing predictions.db files pick this
+    # up without needing to be dropped/recreated.
+    for col, decl in [
+        ("closing_decimal_odds", "REAL"),
+        ("closing_american_odds", "INTEGER"),
+        ("closing_selection", "TEXT"),
+        ("closing_captured_at", "TEXT"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE predictions ADD COLUMN {col} {decl}")
+        except sqlite3.OperationalError:
+            pass  # column already exists
     return conn
 
 
@@ -173,6 +193,98 @@ def _settle_player_prop(row, player_index):
     return ("hit" if hit else "miss"), actual
 
 
+def _spread_team(selection):
+    m = re.match(r"^(.*) [+-]?\d+(?:\.\d+)?$", selection)
+    return m.group(1) if m else selection
+
+
+def _total_side(selection):
+    m = re.match(r"^(Over|Under) ", selection)
+    return m.group(1) if m else None
+
+
+def capture_closing_lines(pool):
+    """Best-effort closing-line capture, reusing the SAME live odds pool the
+    page just fetched for its own suggestions -- zero extra API calls. Every
+    page load before a game's kickoff overwrites closing_decimal_odds with
+    whatever price is live right now; once kickoff passes, this stops
+    touching that row, so whatever was captured on the LAST page load before
+    kickoff is what sticks as "closing." This is an approximation of a true
+    closing-line snapshot (which would need to poll continuously right up to
+    kickoff) -- it's only as fresh as how often the app happens to be opened
+    before a given game starts. A bet whose game starts before the app is
+    ever reopened after being suggested just never gets a closing line,
+    which get_track_record() accounts for by only including captured rows.
+
+    Matches ignore how much the line/point has moved since suggestion time
+    (moneyline by team, spread/total by side, props by player+stat+side) --
+    CLV is about the PRICE you'd get for the same bet now, not whether the
+    exact number is identical to what was first shown.
+    """
+    conn = _connect()
+    now = dt.datetime.now(dt.timezone.utc)
+    candidates_rows = conn.execute(
+        "SELECT * FROM predictions WHERE closing_captured_at IS NULL OR commence_time > ?",
+        (now.isoformat(),),
+    ).fetchall()
+    if not candidates_rows:
+        conn.close()
+        return 0
+
+    by_matchup_market = defaultdict(list)
+    for leg in pool:
+        by_matchup_market[(leg["matchup"], leg["market"])].append(leg)
+
+    updated = 0
+    for row in candidates_rows:
+        commence = _parse_commence(row["commence_time"])
+        if commence and commence < now:
+            continue  # kickoff has passed -- freeze whatever was last captured
+
+        matchup = f"{row['away_team']} @ {row['home_team']}"
+        if row["player"]:
+            live_matches = [
+                l for l in pool
+                if l["matchup"] == matchup
+                and l.get("player") == row["player"]
+                and l.get("stat_category") == row["stat_category"]
+                and l.get("side") == row["side"]
+            ]
+        elif row["market"] == "Moneyline":
+            live_matches = [
+                l for l in by_matchup_market.get((matchup, "Moneyline"), [])
+                if l["selection"] == row["selection"]
+            ]
+        elif row["market"] == "Spread":
+            team = _spread_team(row["selection"])
+            live_matches = [
+                l for l in by_matchup_market.get((matchup, "Spread"), [])
+                if _spread_team(l["selection"]) == team
+            ]
+        elif row["market"] == "Total":
+            side = _total_side(row["selection"])
+            live_matches = [
+                l for l in by_matchup_market.get((matchup, "Total"), [])
+                if _total_side(l["selection"]) == side
+            ]
+        else:
+            live_matches = []
+
+        if not live_matches:
+            continue
+        best = max(live_matches, key=lambda l: l["decimal_odds"])
+        conn.execute(
+            """UPDATE predictions SET closing_decimal_odds=?, closing_american_odds=?,
+               closing_selection=?, closing_captured_at=? WHERE id=?""",
+            (best["decimal_odds"], best["american_odds"], best["selection"], now.isoformat(), row["id"]),
+        )
+        updated += 1
+
+    conn.commit()
+    conn.close()
+    return updated
+
+
 def settle_pending():
     """Attempts to settle every pending prediction whose game started more
     than SETTLEMENT_DELAY_HOURS ago. Safe to call on every page load --
@@ -230,6 +342,9 @@ def get_track_record(stake=5.0):
     settled = conn.execute("SELECT * FROM predictions WHERE status IN ('hit', 'miss')").fetchall()
     pending_count = conn.execute("SELECT COUNT(*) c FROM predictions WHERE status='pending'").fetchone()["c"]
     void_count = conn.execute("SELECT COUNT(*) c FROM predictions WHERE status='void'").fetchone()["c"]
+    with_clv = conn.execute(
+        "SELECT * FROM predictions WHERE closing_decimal_odds IS NOT NULL"
+    ).fetchall()
     conn.close()
 
     total = len(settled)
@@ -251,6 +366,21 @@ def get_track_record(stake=5.0):
     total_returned = sum(stake * r["decimal_odds"] for r in settled if r["status"] == "hit")
     roi_pct = ((total_returned - total_staked) / total_staked * 100) if total_staked else None
 
+    # CLV (closing line value): did we get a better price than the market's
+    # own closing number? Sharp-betting convention treats this as a FASTER,
+    # more reliable skill signal than win/loss -- it doesn't need to wait for
+    # the game to be played, just for the line to move (or not) before
+    # kickoff. clv_pct here is simply "% better decimal odds than closing";
+    # positive means our price was better (the market moved toward us after
+    # we took it), negative means the market moved away from us.
+    clv_rows = []
+    for r in with_clv:
+        clv_pct = (r["decimal_odds"] - r["closing_decimal_odds"]) / r["closing_decimal_odds"] * 100
+        clv_rows.append({**dict(r), "clv_pct": clv_pct})
+    clv_n = len(clv_rows)
+    avg_clv_pct = (sum(r["clv_pct"] for r in clv_rows) / clv_n) if clv_n else None
+    positive_clv_pct = (sum(1 for r in clv_rows if r["clv_pct"] > 0) / clv_n * 100) if clv_n else None
+
     return {
         "total_settled": total,
         "pending": pending_count,
@@ -261,4 +391,9 @@ def get_track_record(stake=5.0):
         "stake": stake,
         "confident": total >= MIN_SAMPLE_FOR_CONFIDENCE,
         "recent": sorted(settled, key=lambda r: r["settled_at"] or "", reverse=True)[:25],
+        "clv_n": clv_n,
+        "avg_clv_pct": avg_clv_pct,
+        "positive_clv_pct": positive_clv_pct,
+        "clv_confident": clv_n >= MIN_SAMPLE_FOR_CLV_CONFIDENCE,
+        "clv_recent": sorted(clv_rows, key=lambda r: r["closing_captured_at"] or "", reverse=True)[:25],
     }

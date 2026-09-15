@@ -61,6 +61,10 @@ def dashboard():
             cards = game_cards.build_game_cards(pool, stake, target, include_insight=include_insight)
             best_odds_parlays = parlay_builder.find_best_odds_parlays(pool, stake, target)
             _record_suggestions(cards, best_odds_parlays, meta.get("season"), meta.get("week"))
+            try:
+                tracking.capture_closing_lines(pool)
+            except Exception:
+                pass
     except odds_client.OddsApiError as e:
         error = str(e)
     except Exception as e:  # surface any other failure plainly rather than a blank page
