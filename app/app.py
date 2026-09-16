@@ -49,10 +49,42 @@ def _dashboard_params():
         request.args.get("target", type=float) or DEFAULT_TARGET_PAYOUT,
         request.args.get("props", "1") != "0",
         request.args.get("insight", "1") != "0",
+        request.args.get("focus_game", ""),
     )
 
 
-def _run_bets_pipeline(stake, target, include_props, include_insight):
+def _parse_event_filter(focus_game):
+    """focus_game is an "Away Team @ Home Team" string from the dropdown, or
+    "" for no filter (all games). Returns a {(home, away)} set for
+    player_props.get_player_prop_candidates, or None for no filter."""
+    if not focus_game or " @ " not in focus_game:
+        return None
+    away, home = focus_game.split(" @ ", 1)
+    return {(home, away)}
+
+
+def _available_games():
+    """Games list for the focus-game dropdown, read from whatever's already
+    cached for get_events() (a free call -- doesn't cost odds-quota either
+    way, but this still respects the current cache_utils mode like
+    everything else, so a plain page view doesn't force a fetch just to
+    populate a dropdown). Empty until the first refresh on a new deployment."""
+    try:
+        events = odds_client.get_events()
+    except Exception:
+        return []
+    seen = set()
+    games = []
+    for e in events:
+        home, away = e.get("home_team"), e.get("away_team")
+        if not home or not away or (home, away) in seen:
+            continue
+        seen.add((home, away))
+        games.append(f"{away} @ {home}")
+    return games
+
+
+def _run_bets_pipeline(stake, target, include_props, include_insight, event_filter=None):
     """The live-data pipeline: settle old predictions, pull odds/model data,
     build cards/parlays, log new suggestions, capture closing lines. Every
     external fetch inside this call chain checks cache_utils.live_fetch_allowed()
@@ -60,7 +92,8 @@ def _run_bets_pipeline(stake, target, include_props, include_insight):
     page view (cache_utils mode 'passive': nothing live happens, whatever's
     cached gets reused regardless of age) as well as from an explicit
     refresh action (mode 'active': stale/missing cache entries actually
-    refetch). Callers are responsible for setting the mode first."""
+    refetch). Callers are responsible for setting the mode first.
+    `event_filter`: see player_props.get_player_prop_candidates."""
     error = None
     pool, meta, cards, best_odds_parlays = [], {}, [], []
     try:
@@ -68,7 +101,9 @@ def _run_bets_pipeline(stake, target, include_props, include_insight):
     except Exception:
         pass
     try:
-        _value_bets, pool, meta = value_finder.get_value_bets_and_pool(include_props=include_props)
+        _value_bets, pool, meta = value_finder.get_value_bets_and_pool(
+            include_props=include_props, event_filter=event_filter,
+        )
         if meta.get("error"):
             error = meta["error"]
         elif pool:
@@ -92,10 +127,13 @@ def dashboard():
     cache is. Only the /refresh-bets and /refresh-injuries routes are allowed
     to actually fetch anything; this just renders whatever's already cached
     (or an empty "click refresh" state on a brand new deployment)."""
-    stake, target, include_props, include_insight = _dashboard_params()
+    stake, target, include_props, include_insight, focus_game = _dashboard_params()
     cache_utils.set_mode("passive")
 
-    error, cards, best_odds_parlays, meta = _run_bets_pipeline(stake, target, include_props, include_insight)
+    error, cards, best_odds_parlays, meta = _run_bets_pipeline(
+        stake, target, include_props, include_insight, _parse_event_filter(focus_game),
+    )
+    available_games = _available_games()
 
     # In passive mode a missing-data "error" almost always just means nothing
     # has ever been refreshed yet on this deployment, not a real failure --
@@ -117,6 +155,8 @@ def dashboard():
         include_insight=include_insight,
         insight_configured=expert_insight.is_configured(),
         offensive_injuries=_offensive_injuries(),
+        focus_game=focus_game,
+        available_games=available_games,
     )
 
 
@@ -126,16 +166,23 @@ def refresh_bets():
     Runs the fetch pipeline in 'active' mode (refetches whatever's actually
     stale, reuses whatever's still fresh) purely to warm the cache, then
     redirects back to / so the URL and any later reload stay on the cheap,
-    cache-only path."""
-    stake, target, include_props, include_insight = _dashboard_params()
+    cache-only path. `focus_game`, when set, is the main lever for keeping
+    this cheap: player-props cost one live request PER game, and
+    get_events() can list several weeks' worth uncapped, so narrowing to a
+    single game the user actually cares about can cut a refresh from 30+
+    quota-consuming requests down to 2."""
+    stake, target, include_props, include_insight, focus_game = _dashboard_params()
     cache_utils.set_mode("active")
     try:
-        _run_bets_pipeline(stake, target, include_props, include_insight)
+        _run_bets_pipeline(
+            stake, target, include_props, include_insight, _parse_event_filter(focus_game),
+        )
     finally:
         cache_utils.set_mode("passive")
     return redirect(url_for(
         "dashboard", stake=stake, target=target,
         props=1 if include_props else 0, insight=1 if include_insight else 0,
+        focus_game=focus_game,
     ))
 
 

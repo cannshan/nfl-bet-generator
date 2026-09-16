@@ -270,7 +270,14 @@ def _consolidate_best_prices(event_odds):
     return best
 
 
-def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None):
+def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None, event_filter=None):
+    """`event_filter`, when given, is a set of (home_team, away_team) tuples
+    -- only those games get a per-event props call. Each event costs one
+    live API request (The Odds API's per-event endpoint isn't bulk like its
+    game-odds endpoint), and get_events() can return several weeks' worth of
+    upcoming games uncapped, so fetching props for every one of them by
+    default can cost 30+ requests per refresh. Narrowing to specific games
+    the user actually cares about is the main lever for controlling that."""
     season, week, _season_type = espn_client.get_current_season_and_week()
     player_index = nflverse_client.build_player_index(season)
     current_rosters = roster_client.get_current_rosters()
@@ -288,6 +295,8 @@ def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None):
         league_avg["rush"] = sum(v["rush"] for v in allowed.values()) / len(allowed)
 
     events = odds_client.get_events()
+    if event_filter:
+        events = [e for e in events if (e.get("home_team"), e.get("away_team")) in event_filter]
     if max_events:
         events = events[:max_events]
 

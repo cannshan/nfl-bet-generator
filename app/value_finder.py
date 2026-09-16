@@ -258,9 +258,11 @@ def analyze_games(odds_data, model):
 _make_leg = odds_math.make_leg
 
 
-def get_value_bets_and_pool(markets="h2h,spreads,totals", include_props=True):
+def get_value_bets_and_pool(markets="h2h,spreads,totals", include_props=True, event_filter=None):
     """Top-level entry point used by the web app.
     Returns (value_bets, parlay_pool, meta) or raises on hard failure.
+    `event_filter`: see player_props.get_player_prop_candidates -- narrows
+    which games get a (costly, one-call-per-event) props fetch.
     """
     from app import odds_client
 
@@ -275,7 +277,7 @@ def get_value_bets_and_pool(markets="h2h,spreads,totals", include_props=True):
     if include_props:
         try:
             from app import player_props
-            prop_candidates = player_props.get_player_prop_candidates()
+            prop_candidates = player_props.get_player_prop_candidates(event_filter=event_filter)
             candidates += prop_candidates
             props_used = True
         except odds_client.OddsApiError:

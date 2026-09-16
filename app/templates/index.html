@@ -87,6 +87,14 @@
       Include player props
     </label>
     <input type="hidden" name="props" value="0" style="display:none">
+    <label>Focus game (props only)
+      <select name="focus_game">
+        <option value="" {% if not focus_game %}selected{% endif %}>All games</option>
+        {% for g in available_games %}
+          <option value="{{ g }}" {% if g == focus_game %}selected{% endif %}>{{ g }}</option>
+        {% endfor %}
+      </select>
+    </label>
     {% if insight_configured %}
       <label class="checkbox-label">
         <input type="checkbox" name="insight" value="1" {% if include_insight %}checked{% endif %}>
@@ -99,6 +107,8 @@
   <p class="meta">
     Viewing this page never makes a live API call — it only ever shows what's already cached (however
     old). Click <strong>Refresh Bets</strong> to actually pull current odds and rebuild everything.
+    Player props cost one live request per game, and picking "All games" can mean 30+ requests in one
+    click — pick a specific game above if you just want that one, to keep it to 2.
   </p>
 
   {% if never_refreshed %}
