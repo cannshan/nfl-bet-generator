@@ -1,6 +1,7 @@
 import requests
 from app.config import ODDS_API_KEY, ODDS_API_BASE, ODDS_CACHE_TTL_SECONDS
 from app.cache_utils import cache_get, cache_set, live_fetch_allowed
+from app import sportsgameodds_client
 
 SPORT_KEY = "americanfootball_nfl"
 
@@ -10,9 +11,13 @@ class OddsApiError(Exception):
 
 
 def get_odds(markets="h2h,spreads,totals", regions="us"):
-    """Fetch current NFL odds across books. Cached to conserve the free-tier quota."""
-    _require_key()
-
+    """Fetch current NFL odds across books. Cached to conserve the free-tier
+    quota. Falls back to sportsgameodds_client (a separate free provider)
+    when The Odds API's key is missing/rejected or its quota is exhausted --
+    that failure mode is common enough (a single free-tier month is only
+    500 requests) to be worth a real fallback rather than just an error
+    banner. The Odds API is always tried first; the fallback only engages
+    on an actual failure."""
     cache_key = f"odds_{markets}_{regions}"
     cached = cache_get(cache_key, ODDS_CACHE_TTL_SECONDS)
     if cached is not None:
@@ -20,19 +25,28 @@ def get_odds(markets="h2h,spreads,totals", regions="us"):
     if not live_fetch_allowed():
         return []
 
-    url = f"{ODDS_API_BASE}/sports/{SPORT_KEY}/odds/"
-    params = {
-        "apiKey": ODDS_API_KEY,
-        "regions": regions,
-        "markets": markets,
-        "oddsFormat": "american",
-        "dateFormat": "iso",
-    }
-    resp = requests.get(url, params=params, timeout=15)
-    _handle_errors(resp)
-    data = resp.json()
-    cache_set(cache_key, data)
-    return data
+    try:
+        _require_key()
+        url = f"{ODDS_API_BASE}/sports/{SPORT_KEY}/odds/"
+        params = {
+            "apiKey": ODDS_API_KEY,
+            "regions": regions,
+            "markets": markets,
+            "oddsFormat": "american",
+            "dateFormat": "iso",
+        }
+        resp = requests.get(url, params=params, timeout=15)
+        _handle_errors(resp)
+        data = resp.json()
+        cache_set(cache_key, data)
+        return data
+    except OddsApiError as e:
+        if not sportsgameodds_client.is_configured():
+            raise
+        print(f"[odds_client] The Odds API unavailable ({e}) -- falling back to sportsgameodds.com")
+        data = sportsgameodds_client.get_game_odds()
+        cache_set(cache_key, data)
+        return data
 
 
 def remaining_quota(response_headers):

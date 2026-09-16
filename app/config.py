@@ -16,6 +16,10 @@ ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
+# Free fallback odds source, used only when The Odds API's key is rejected or
+# its quota is exhausted -- see sportsgameodds_client.py.
+SPORTSGAMEODDS_API_KEY = os.environ.get("SPORTSGAMEODDS_API_KEY", "")
+
 ODDS_CACHE_TTL_SECONDS = 10 * 60
 RATINGS_CACHE_TTL_SECONDS = 6 * 60 * 60
 

@@ -24,13 +24,21 @@ against the real result once the game is played — see below.
 
 - **Odds data**: [The Odds API](https://the-odds-api.com) — live NFL lines
   (moneyline, spread, totals, and player props) from multiple sportsbooks.
-- **Team stats**: ESPN's public scoreboard API — real completed-game scores
-  for the current season (blended with last season early on, when there
-  isn't enough current-season data yet).
-- **Efficiency & player stats**: [nflverse](https://github.com/nflverse/nflverse-data)'s
-  free, no-key CSV data releases — team-level EPA (Expected Points Added) per
-  game, and per-player weekly stat lines (passing/rushing/receiving) used to
-  project player props.
+  Free tier is 500 requests/month; if that key ever gets rejected or the
+  quota runs out, the app automatically falls back to a second free
+  provider, [sportsgameodds.com](https://sportsgameodds.com) (optional —
+  set `SPORTSGAMEODDS_API_KEY` to enable it), for moneyline/spread/total
+  odds only. The Odds API is always tried first; the fallback only kicks in
+  on an actual failure.
+- **Team scores**: [nflverse](https://github.com/nflverse/nflverse-data)'s
+  free `games.csv` release — every NFL game's final score since 1999.
+  (Originally used ESPN's scoreboard API for this, but that endpoint turned
+  out to have a much stricter rate limit than ESPN's other endpoints and
+  got this app's own IP blocked during testing — nflverse's GitHub-hosted
+  CSV doesn't have that problem.)
+- **Efficiency & player stats**: nflverse's free, no-key CSV data releases —
+  team-level EPA (Expected Points Added) per game, and per-player weekly
+  stat lines (passing/rushing/receiving) used to project player props.
 - **Team model**: an opponent-adjusted power rating (similar in spirit to a
   Massey rating) computed from real scoring margins, blended with nflverse's
   EPA-based team efficiency ratings, converted to win/cover/total
@@ -212,7 +220,10 @@ against the real result once the game is played — see below.
    ```
    Optionally add `ANTHROPIC_API_KEY=your_key_here` too, to enable live expert
    insight (see below) — the app works fine without it, just without that
-   one section.
+   one section. Also optionally add `SPORTSGAMEODDS_API_KEY=your_key_here`
+   (free at [sportsgameodds.com](https://sportsgameodds.com), no credit
+   card) so the app can fall back automatically if The Odds API's key ever
+   gets rejected or its quota runs out.
 4. Install dependencies:
    ```bash
    python -m venv .venv
