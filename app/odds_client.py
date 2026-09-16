@@ -45,7 +45,15 @@ def get_odds(markets="h2h,spreads,totals", regions="us"):
             raise
         print(f"[odds_client] The Odds API unavailable ({e}) -- falling back to sportsgameodds.com")
         data = sportsgameodds_client.get_game_odds()
-        cache_set(cache_key, data)
+        if data:
+            # Only cache a real answer. If the fallback ALSO came back empty
+            # (its own rate limit, a transient error, etc.), caching that
+            # would trap every subsequent request -- even after both
+            # providers recover -- behind a stale "no games" result for the
+            # rest of the TTL window. An empty result here is far more
+            # likely to mean "both providers failed right now" than "there
+            # are genuinely zero NFL games," so just don't cache it.
+            cache_set(cache_key, data)
         return data
 
 
@@ -99,7 +107,8 @@ def get_events():
             raise
         print(f"[odds_client] The Odds API unavailable ({e}) -- falling back to sportsgameodds.com for events")
         data = sportsgameodds_client.get_events_list()
-        cache_set(cache_key, data)
+        if data:  # don't cache an empty result from a failed fallback -- see get_odds()
+            cache_set(cache_key, data)
         return data
 
 
@@ -140,5 +149,6 @@ def get_event_odds(event_id, markets, regions="us", home_team=None, away_team=No
         if not sportsgameodds_client.is_configured():
             raise
         data = sportsgameodds_client.get_event_props(event_id, markets, home_team, away_team)
-        cache_set(cache_key, data)
+        if data:  # {} means the fallback couldn't even find/match the event -- don't cache that
+            cache_set(cache_key, data)
         return data
