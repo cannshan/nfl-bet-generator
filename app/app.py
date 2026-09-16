@@ -151,6 +151,7 @@ def dashboard():
         stake, target, include_props, include_insight, _parse_event_filter(focus_game),
     )
     available_games = _available_games()
+    odds_api_quota = odds_client.get_quota_usage()
 
     # In passive mode a missing-data "error" almost always just means nothing
     # has ever been refreshed yet on this deployment, not a real failure --
@@ -174,6 +175,7 @@ def dashboard():
         offensive_injuries=_offensive_injuries(),
         focus_game=focus_game,
         available_games=available_games,
+        odds_api_quota=odds_api_quota,
     )
 
 

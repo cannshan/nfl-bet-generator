@@ -1,13 +1,41 @@
+import time
 import requests
 from app.config import ODDS_API_KEY, ODDS_API_BASE, ODDS_CACHE_TTL_SECONDS
-from app.cache_utils import cache_get, cache_set, live_fetch_allowed
+from app.cache_utils import cache_get, cache_set, live_fetch_allowed, get_raw, set_raw
 from app import sportsgameodds_client
 
 SPORT_KEY = "americanfootball_nfl"
+QUOTA_CACHE_KEY = "odds_api_quota"
 
 
 class OddsApiError(Exception):
     pass
+
+
+def _record_quota(resp):
+    """The Odds API returns these headers on every real response (success or
+    error), so this is a free side effect of a call we're already making --
+    not an extra request. Stored so the dashboard can show a usage bar
+    without itself needing to hit the API."""
+    used = resp.headers.get("x-requests-used")
+    remaining = resp.headers.get("x-requests-remaining")
+    if used is None and remaining is None:
+        return
+    try:
+        set_raw(QUOTA_CACHE_KEY, {
+            "used": int(used) if used is not None else None,
+            "remaining": int(remaining) if remaining is not None else None,
+            "updated_at": time.time(),
+        })
+    except (TypeError, ValueError):
+        pass
+
+
+def get_quota_usage():
+    """Last-known Odds API usage, or None if nothing's been recorded yet
+    (e.g. a brand new deployment before the first live call). Reading this
+    is never itself a live call -- safe for a plain passive page view."""
+    return get_raw(QUOTA_CACHE_KEY)
 
 
 def get_odds(markets="h2h,spreads,totals", regions="us"):
@@ -36,6 +64,7 @@ def get_odds(markets="h2h,spreads,totals", regions="us"):
             "dateFormat": "iso",
         }
         resp = requests.get(url, params=params, timeout=15)
+        _record_quota(resp)
         _handle_errors(resp)
         data = resp.json()
         cache_set(cache_key, data)
@@ -141,6 +170,7 @@ def get_event_odds(event_id, markets, regions="us", home_team=None, away_team=No
             },
             timeout=15,
         )
+        _record_quota(resp)
         _handle_errors(resp)
         data = resp.json()
         cache_set(cache_key, data)

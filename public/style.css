@@ -25,6 +25,19 @@ body {
 
 header h1 { margin-bottom: 4px; }
 
+.quota-bar { margin-bottom: 16px; }
+.quota-bar-label { color: var(--muted); font-size: 13px; margin-bottom: 4px; }
+.quota-bar-track {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  height: 8px;
+  overflow: hidden;
+}
+.quota-bar-fill { background: var(--accent2); height: 100%; transition: width 0.3s ease; }
+.quota-bar-fill-warn { background: #eab308; }
+.quota-bar-fill-danger { background: #ef4444; }
+
 .tabs { display: flex; gap: 4px; margin-bottom: 16px; }
 .tab {
   color: var(--muted);

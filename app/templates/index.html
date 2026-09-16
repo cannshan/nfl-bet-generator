@@ -18,6 +18,19 @@
     </nav>
   </header>
 
+  {% if odds_api_quota and odds_api_quota.used is not none and odds_api_quota.remaining is not none %}
+  {% set quota_total = odds_api_quota.used + odds_api_quota.remaining %}
+  {% set quota_pct = (odds_api_quota.used / quota_total * 100) if quota_total else 0 %}
+  <div class="quota-bar" title="The Odds API usage this billing period">
+    <div class="quota-bar-label">
+      Odds API: {{ odds_api_quota.used }} / {{ quota_total }} credits used ({{ "%.0f"|format(quota_pct) }}%)
+    </div>
+    <div class="quota-bar-track">
+      <div class="quota-bar-fill{% if quota_pct >= 90 %} quota-bar-fill-danger{% elif quota_pct >= 70 %} quota-bar-fill-warn{% endif %}" style="width: {{ quota_pct }}%;"></div>
+    </div>
+  </div>
+  {% endif %}
+
   {% if offensive_injuries %}
   <details class="injuries-details">
     <summary>

@@ -117,3 +117,30 @@ def cache_set(key, data):
         ).execute()
     except Exception:
         pass
+
+
+def get_raw(key):
+    """Reads a key with no TTL/mode restriction at all -- for small bits of
+    state (e.g. odds-API quota usage) that should always show whatever was
+    last recorded, even on a plain passive page view, since reading it isn't
+    a live fetch itself."""
+    try:
+        rows = _sb().table(TABLE).select("data").eq("key", key).limit(1).execute().data
+    except Exception:
+        return None
+    return rows[0]["data"] if rows else None
+
+
+def set_raw(key, data):
+    """Writes a key with no size/mode gating -- for small pieces of state
+    that should always be recorded when available, notably as a side effect
+    of a call that already happened (not a new live fetch of its own)."""
+    with _request_cache_lock:
+        _request_cache[key] = data
+    try:
+        _sb().table(TABLE).upsert(
+            {"key": key, "data": data, "cached_at": time.time()},
+            on_conflict="key",
+        ).execute()
+    except Exception:
+        pass
