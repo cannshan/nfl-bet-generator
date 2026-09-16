@@ -31,3 +31,11 @@ CREATE TABLE IF NOT EXISTS nfl_predictions (
     closing_captured_at TEXT,
     UNIQUE (home_team, away_team, commence_time, market, selection)
 );
+
+-- Generic key/value cache (replaces the old local-file cache, which won't
+-- work on a read-only serverless filesystem like Vercel's).
+CREATE TABLE IF NOT EXISTS app_cache (
+    key TEXT PRIMARY KEY,
+    data JSONB NOT NULL,
+    cached_at DOUBLE PRECISION NOT NULL
+);

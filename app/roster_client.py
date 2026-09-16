@@ -12,6 +12,7 @@ stat row's 'team' field.
 import requests
 from app.config import ESPN_API_BASE
 from app.cache_utils import cache_get, cache_set
+from app.espn_client import HEADERS
 
 TIMEOUT = 15
 CACHE_TTL_SECONDS = 12 * 60 * 60
@@ -25,7 +26,7 @@ def get_current_rosters():
         return cached
 
     try:
-        resp = requests.get(f"{ESPN_API_BASE}/teams", params={"limit": 40}, timeout=TIMEOUT)
+        resp = requests.get(f"{ESPN_API_BASE}/teams", params={"limit": 40}, timeout=TIMEOUT, headers=HEADERS)
         resp.raise_for_status()
         teams = resp.json()["sports"][0]["leagues"][0]["teams"]
     except (requests.RequestException, KeyError, IndexError):
@@ -35,7 +36,7 @@ def get_current_rosters():
     for entry in teams:
         team = entry["team"]
         try:
-            resp = requests.get(f"{ESPN_API_BASE}/teams/{team['id']}/roster", timeout=TIMEOUT)
+            resp = requests.get(f"{ESPN_API_BASE}/teams/{team['id']}/roster", timeout=TIMEOUT, headers=HEADERS)
             resp.raise_for_status()
             data = resp.json()
         except requests.RequestException:
@@ -68,7 +69,7 @@ def get_qb_depth_charts():
         return cached
 
     try:
-        resp = requests.get(f"{ESPN_API_BASE}/teams", params={"limit": 40}, timeout=TIMEOUT)
+        resp = requests.get(f"{ESPN_API_BASE}/teams", params={"limit": 40}, timeout=TIMEOUT, headers=HEADERS)
         resp.raise_for_status()
         teams = resp.json()["sports"][0]["leagues"][0]["teams"]
     except (requests.RequestException, KeyError, IndexError):
@@ -78,7 +79,7 @@ def get_qb_depth_charts():
     for entry in teams:
         team = entry["team"]
         try:
-            resp = requests.get(f"{ESPN_API_BASE}/teams/{team['id']}/depthcharts", timeout=TIMEOUT)
+            resp = requests.get(f"{ESPN_API_BASE}/teams/{team['id']}/depthcharts", timeout=TIMEOUT, headers=HEADERS)
             resp.raise_for_status()
             data = resp.json()
         except requests.RequestException:

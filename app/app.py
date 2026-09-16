@@ -2,7 +2,12 @@ from flask import Flask, render_template, request, jsonify
 from app.config import DEFAULT_STAKE, DEFAULT_TARGET_PAYOUT
 from app import value_finder, odds_client, game_cards, parlay_builder, expert_insight, injury_client, tracking
 
-app = Flask(__name__)
+# static_folder points at the repo-root public/ directory (Vercel's
+# convention -- it serves public/** from its CDN and Flask's own
+# app.static_folder is explicitly unsupported there), with static_url_path=""
+# so both local dev (`python run.py`) and Vercel resolve the same file at the
+# same URL (e.g. /style.css) from the same single copy on disk.
+app = Flask(__name__, static_folder="../public", static_url_path="")
 
 POSITION_ORDER = {"QB": 0, "RB": 1, "FB": 2, "WR": 3, "TE": 4}
 # Out/Doubtful/Questionable are fresh, this-week game-time decisions; IR is a

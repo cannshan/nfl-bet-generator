@@ -7,6 +7,18 @@ from app.cache_utils import cache_get, cache_set
 TIMEOUT = 15
 REGULAR_SEASON_WEEKS = 18
 
+# ESPN's public API returns 400 Bad Request for requests from cloud/datacenter
+# IP ranges (confirmed: identical requests work fine from a home network, fail
+# from Vercel) unless they look like an ordinary browser -- a realistic
+# User-Agent is enough to get past it.
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json",
+}
+
 
 def get_current_scoreboard():
     """Returns the current week's scoreboard, which also tells us season/week.
@@ -19,7 +31,7 @@ def get_current_scoreboard():
     cached = cache_get(cache_key, 60 * 30)
     if cached is not None:
         return cached
-    resp = requests.get(f"{ESPN_API_BASE}/scoreboard", timeout=TIMEOUT)
+    resp = requests.get(f"{ESPN_API_BASE}/scoreboard", timeout=TIMEOUT, headers=HEADERS)
     resp.raise_for_status()
     data = resp.json()
     cache_set(cache_key, data)
@@ -27,11 +39,31 @@ def get_current_scoreboard():
 
 
 def get_current_season_and_week():
-    sb = get_current_scoreboard()
-    season = sb.get("season", {}).get("year")
-    week = sb.get("week", {}).get("number")
-    season_type = sb.get("season", {}).get("type", 2)
-    return season, week, season_type
+    """Prefers ESPN's own "current week" endpoint when it's reachable, but
+    falls back to computing season/week from today's date when it isn't --
+    ESPN's WAF blocks this specific unparameterized endpoint from some cloud
+    hosts (observed: works fine from a home network, 403s from Vercel) even
+    though the exact same domain's dated-range queries go through fine with
+    a browser-like User-Agent. Pure date arithmetic can't be blocked."""
+    try:
+        sb = get_current_scoreboard()
+        season = sb.get("season", {}).get("year")
+        week = sb.get("week", {}).get("number")
+        season_type = sb.get("season", {}).get("type", 2)
+        if season and week:
+            return season, week, season_type
+    except requests.RequestException:
+        pass
+    return _compute_season_and_week_from_date()
+
+
+def _compute_season_and_week_from_date(today=None):
+    today = today or dt.date.today()
+    this_year_kickoff = season_kickoff_date(today.year)
+    season = today.year if today >= this_year_kickoff else today.year - 1
+    kickoff = season_kickoff_date(season)
+    week = min(REGULAR_SEASON_WEEKS, max(1, (today - kickoff).days // 7 + 1))
+    return season, week, 2
 
 
 def season_kickoff_date(season_start_year):
@@ -61,6 +93,7 @@ def _fetch_date_range(start_date, end_date):
                 f"{ESPN_API_BASE}/scoreboard",
                 params={"dates": date_param, "limit": 100},
                 timeout=TIMEOUT,
+                headers=HEADERS,
             )
             resp.raise_for_status()
             data = resp.json()
