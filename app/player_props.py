@@ -27,6 +27,7 @@ price. Small-sample players (fewer than MIN_GAMES_WEIGHT effective games)
 are skipped rather than guessed at.
 """
 import re
+from concurrent.futures import ThreadPoolExecutor
 from app import odds_client, nflverse_client, ratings, odds_math, espn_client, injury_client, weather_client, roster_client
 
 # ESPN's comments are written like news blurbs ("X said Wednesday that...,
@@ -270,6 +271,24 @@ def _consolidate_best_prices(event_odds):
     return best
 
 
+def _fetch_event_odds_and_weather(event, markets):
+    """One event's props + weather -- independent of every other event, so
+    get_player_prop_candidates runs this concurrently across all events
+    rather than one at a time (each call is a network round trip even on a
+    cache hit)."""
+    try:
+        event_odds = odds_client.get_event_odds(
+            event["id"], markets,
+            home_team=event.get("home_team"), away_team=event.get("away_team"),
+        )
+    except odds_client.OddsApiError:
+        return None
+    home = event_odds.get("home_team")
+    commence = event_odds.get("commence_time")
+    weather = weather_client.get_game_weather(home, commence) if home else None
+    return event_odds, weather
+
+
 def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None, event_filter=None):
     """`event_filter`, when given, is a set of (home_team, away_team) tuples
     -- only those games get a per-event props call. Each event costs one
@@ -279,14 +298,27 @@ def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None, event_f
     default can cost 30+ requests per refresh. Narrowing to specific games
     the user actually cares about is the main lever for controlling that."""
     season, week, _season_type = espn_client.get_current_season_and_week()
-    player_index = nflverse_client.build_player_index(season)
-    current_rosters = roster_client.get_current_rosters()
-    allowed = nflverse_client.compute_allowed_yardage(season)
-    injuries = injury_client.get_injury_lookup()
+
+    # These 5 lookups are all independent of each other (only depend on
+    # `season`, already known) -- running them concurrently rather than one
+    # at a time was the other big chunk of a slow page load, alongside the
+    # per-event props loop below.
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        f_player_index = pool.submit(nflverse_client.build_player_index, season)
+        f_rosters = pool.submit(roster_client.get_current_rosters)
+        f_allowed = pool.submit(nflverse_client.compute_allowed_yardage, season)
+        f_injuries = pool.submit(injury_client.get_injury_lookup)
+        f_qb_depth = pool.submit(roster_client.get_qb_depth_charts)
+        player_index = f_player_index.result()
+        current_rosters = f_rosters.result()
+        allowed = f_allowed.result()
+        injuries = f_injuries.result()
+        qb_depth_charts = f_qb_depth.result()
+
     reliability = _compute_category_reliability(player_index)
     defensive_bonus = _defensive_injury_bonus_by_team(player_index, injuries, current_rosters)
     qb_out_teams = {
-        team for team, qb_list in roster_client.get_qb_depth_charts().items()
+        team for team, qb_list in qb_depth_charts.items()
         if qb_list and injuries.get(qb_list[0], {}).get("status") in injury_client.EXCLUDE_STATUSES
     }
     league_avg = {}
@@ -300,21 +332,25 @@ def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None, event_f
     if max_events:
         events = events[:max_events]
 
+    # Each event's props + weather are fetched independently of every other
+    # event -- with 15-30 games in a normal week, doing this one at a time
+    # was the single biggest contributor to a slow page load (each fetch is
+    # a network round trip, even when it's just a cache lookup). None of
+    # this touches shared state, so it's safe to run concurrently.
+    fetched = list(ThreadPoolExecutor(max_workers=20).map(
+        lambda e: _fetch_event_odds_and_weather(e, markets), events,
+    ))
+
     candidates = []
-    for event in events:
-        try:
-            event_odds = odds_client.get_event_odds(
-                event["id"], markets,
-                home_team=event.get("home_team"), away_team=event.get("away_team"),
-            )
-        except odds_client.OddsApiError:
+    for event, fetched_result in zip(events, fetched):
+        if fetched_result is None:
             continue
+        event_odds, weather = fetched_result
 
         home = event_odds.get("home_team")
         away = event_odds.get("away_team")
         matchup = f"{away} @ {home}"
         commence = event_odds.get("commence_time")
-        weather = weather_client.get_game_weather(home, commence)
 
         best_prices = _consolidate_best_prices(event_odds)
         pairs = {}

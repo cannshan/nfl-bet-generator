@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, render_template, request, jsonify, redirect, url_for
 from app.config import DEFAULT_STAKE, DEFAULT_TARGET_PAYOUT
 from app import value_finder, odds_client, game_cards, parlay_builder, expert_insight, injury_client, tracking, cache_utils
@@ -8,6 +9,12 @@ from app import value_finder, odds_client, game_cards, parlay_builder, expert_in
 # so both local dev (`python run.py`) and Vercel resolve the same file at the
 # same URL (e.g. /style.css) from the same single copy on disk.
 app = Flask(__name__, static_folder="../public", static_url_path="")
+
+
+@app.before_request
+def _reset_request_cache():
+    cache_utils.reset_request_cache()
+
 
 POSITION_ORDER = {"QB": 0, "RB": 1, "FB": 2, "WR": 3, "TE": 4}
 # Out/Doubtful/Questionable are fresh, this-week game-time decisions; IR is a
@@ -33,14 +40,24 @@ def _record_suggestions(cards, best_odds_parlays, season, week):
     """Logs every leg actually shown to the user -- the real suggestions,
     not the full candidate pool -- so the track record reflects what this
     app told you before any outcome was known. Best-effort: a logging
-    failure should never break the page."""
-    try:
-        for card in cards:
-            tracking.log_suggestions(card["legs"], season, week, section="same_game_parlay")
-        for parlay in best_odds_parlays:
-            tracking.log_suggestions(parlay["legs"], season, week, section="best_odds_parlay")
-    except Exception:
-        pass
+    failure should never break the page. One log_suggestions call per
+    card/parlay is independent of every other, so they run concurrently
+    rather than one at a time (this used to be a real chunk of page load
+    time with a full slate of games)."""
+    calls = [(card["legs"], "same_game_parlay") for card in cards]
+    calls += [(parlay["legs"], "best_odds_parlay") for parlay in best_odds_parlays]
+    if not calls:
+        return
+
+    def _log(item):
+        legs, section = item
+        try:
+            tracking.log_suggestions(legs, season, week, section=section)
+        except Exception:
+            pass
+
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        list(pool.map(_log, calls))
 
 
 def _dashboard_params():

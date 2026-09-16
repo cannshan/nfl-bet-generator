@@ -26,6 +26,7 @@ no per-user auth in this app (Row Level Security bypass is intentional).
 import datetime as dt
 import re
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from supabase import create_client, ClientOptions
 from app.config import SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 from app import espn_client, nflverse_client
@@ -211,7 +212,13 @@ def capture_closing_lines(pool):
     for leg in pool:
         by_matchup_market[(leg["matchup"], leg["market"])].append(leg)
 
-    updated = 0
+    # Figure out (row id -> update payload) for every row that needs one --
+    # pure Python, no I/O -- THEN fire off the actual writes concurrently.
+    # This used to update one row at a time sequentially; with 30-40+
+    # pending predictions typical mid-week, that alone was the single
+    # biggest contributor to page load time (measured: ~5.7s of a ~10s
+    # load), since it ran on every request, not just an explicit refresh.
+    to_update = {}
     for row in candidates_rows:
         commence = _parse_commence(row["commence_time"])
         if commence and commence < now:
@@ -249,18 +256,27 @@ def capture_closing_lines(pool):
         if not live_matches:
             continue
         best = max(live_matches, key=lambda l: l["decimal_odds"])
-        try:
-            _sb().table(TABLE).update({
-                "closing_decimal_odds": best["decimal_odds"],
-                "closing_american_odds": best["american_odds"],
-                "closing_selection": best["selection"],
-                "closing_captured_at": now.isoformat(),
-            }).eq("id", row["id"]).execute()
-            updated += 1
-        except Exception:
-            continue
+        to_update[row["id"]] = {
+            "closing_decimal_odds": best["decimal_odds"],
+            "closing_american_odds": best["american_odds"],
+            "closing_selection": best["selection"],
+            "closing_captured_at": now.isoformat(),
+        }
 
-    return updated
+    if not to_update:
+        return 0
+
+    def _write(item):
+        row_id, payload = item
+        try:
+            _sb().table(TABLE).update(payload).eq("id", row_id).execute()
+            return True
+        except Exception:
+            return False
+
+    with ThreadPoolExecutor(max_workers=20) as pool_:
+        results = list(pool_.map(_write, to_update.items()))
+    return sum(results)
 
 
 def settle_pending():
@@ -276,8 +292,13 @@ def settle_pending():
 
     games_by_season = {}
     players_by_season = {}
-    settled_count = 0
 
+    # Work out which rows actually settle (pure computation, no I/O) before
+    # writing anything, THEN fire the writes concurrently -- same fix as
+    # capture_closing_lines: sequential one-row-at-a-time updates were a
+    # major contributor to page load time whenever several bets settled at
+    # once (e.g. right after a Sunday slate finishes).
+    to_update = {}
     for row in pending:
         commence = _parse_commence(row["commence_time"])
         if not commence or commence > cutoff:
@@ -306,16 +327,25 @@ def settle_pending():
         if status is None:
             continue  # data not posted yet -- leave pending, retry on a later refresh
 
-        try:
-            _sb().table(TABLE).update({
-                "status": status, "actual_value": actual,
-                "settled_at": dt.datetime.utcnow().isoformat(),
-            }).eq("id", row["id"]).execute()
-            settled_count += 1
-        except Exception:
-            continue
+        to_update[row["id"]] = {
+            "status": status, "actual_value": actual,
+            "settled_at": dt.datetime.utcnow().isoformat(),
+        }
 
-    return settled_count
+    if not to_update:
+        return 0
+
+    def _write(item):
+        row_id, payload = item
+        try:
+            _sb().table(TABLE).update(payload).eq("id", row_id).execute()
+            return True
+        except Exception:
+            return False
+
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        results = list(pool.map(_write, to_update.items()))
+    return sum(results)
 
 
 def get_track_record(stake=5.0):

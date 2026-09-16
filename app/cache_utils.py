@@ -10,6 +10,7 @@ means the cache actually persists BETWEEN invocations, which a serverless
 function's own local disk never would anyway.
 """
 import json
+import threading
 import time
 from supabase import create_client, ClientOptions
 from app.config import SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
@@ -48,6 +49,23 @@ _client = None
 # cache entry triggers a real fetch.
 _MODE = "passive"
 
+# In-process memoization for the lifetime of ONE request (cleared by
+# app.py's before_request hook) -- purely to avoid asking Supabase for the
+# SAME key twice within a single page load (e.g. team-week stats are read
+# by both compute_allowed_yardage and compute_net_epa_ratings). Not a
+# substitute for the real cache: this dict starts empty on every request
+# (and on every cold serverless instance), it just stops one request from
+# repeating a lookup it already made a moment ago. Guarded by a lock since
+# player_props.py now fetches multiple events concurrently.
+_request_cache = {}
+_request_cache_lock = threading.Lock()
+
+
+def reset_request_cache():
+    global _request_cache
+    with _request_cache_lock:
+        _request_cache = {}
+
 
 def set_mode(mode):
     assert mode in ("passive", "active")
@@ -70,6 +88,9 @@ def _sb():
 
 
 def cache_get(key, ttl_seconds):
+    with _request_cache_lock:
+        if key in _request_cache:
+            return _request_cache[key]
     try:
         rows = _sb().table(TABLE).select("data,cached_at").eq("key", key).limit(1).execute().data
     except Exception:
@@ -79,10 +100,14 @@ def cache_get(key, ttl_seconds):
     row = rows[0]
     if _MODE == "active" and time.time() - row["cached_at"] > ttl_seconds:
         return None
+    with _request_cache_lock:
+        _request_cache[key] = row["data"]
     return row["data"]
 
 
 def cache_set(key, data):
+    with _request_cache_lock:
+        _request_cache[key] = data
     try:
         if len(json.dumps(data)) > MAX_CACHEABLE_BYTES:
             return
