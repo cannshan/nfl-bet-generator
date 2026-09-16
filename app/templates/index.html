@@ -104,13 +104,6 @@
     {% endif %}
     <button type="submit">Refresh Bets</button>
   </form>
-  <p class="meta">
-    Viewing this page never makes a live API call — it only ever shows what's already cached (however
-    old). Click <strong>Refresh Bets</strong> to actually pull current odds and rebuild everything.
-    Player props cost one live request per game, and picking "All games" can mean 30+ requests in one
-    click — pick a specific game above if you just want that one, to keep it to 2.
-  </p>
-
   {% if never_refreshed %}
     <div class="meta" style="margin-bottom:20px;">
       Nothing's been loaded yet on this deployment. Click <strong>Refresh Bets</strong> above to pull
@@ -168,13 +161,6 @@
   {% if best_odds_parlays %}
   <section>
     <h2>Statistically Best Bets (${{ stake }} → ~${{ target|round(0) }})</h2>
-    <p class="meta">
-      No restriction on which games a leg comes from — this picks whatever combination of props
-      and lines gives the highest real hit chance at a payout near your target, using every signal
-      the model has. When a combo happens to include more than one leg from the same game, that's
-      flagged below — the combined probability for those is an estimate, same as a Same Game Parlay,
-      since those legs aren't actually independent.
-    </p>
     <div class="parlay-grid">
       {% for p in best_odds_parlays %}
       <div class="parlay-card" data-stake="{{ stake }}">
