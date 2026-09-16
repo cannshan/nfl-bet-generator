@@ -26,7 +26,7 @@ no per-user auth in this app (Row Level Security bypass is intentional).
 import datetime as dt
 import re
 from collections import defaultdict
-from supabase import create_client
+from supabase import create_client, ClientOptions
 from app.config import SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 from app import espn_client, nflverse_client
 
@@ -43,7 +43,10 @@ _client = None
 def _sb():
     global _client
     if _client is None:
-        _client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+        _client = create_client(
+            SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
+            options=ClientOptions(postgrest_client_timeout=20),
+        )
     return _client
 
 

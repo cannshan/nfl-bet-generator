@@ -18,6 +18,7 @@ from app.config import RATINGS_CACHE_TTL_SECONDS
 
 TEAM_RELEASE_URL = "https://github.com/nflverse/nflverse-data/releases/download/stats_team/stats_team_week_{season}.csv"
 PLAYER_RELEASE_URL = "https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_{season}.csv"
+GAMES_RELEASE_URL = "https://github.com/nflverse/nflverse-data/releases/download/schedules/games.csv"
 TIMEOUT = 20
 
 TEAM_ABBR_TO_NAME = {
@@ -52,6 +53,61 @@ def _fetch_csv_rows(cache_key, url):
     rows = [row for row in reader if row.get("season_type") == "REG"]
     cache_set(cache_key, rows)
     return rows
+
+
+def _fetch_all_games():
+    """Every NFL game since 1999, one single CSV (not split per-season like
+    the stats releases) -- home/away as team ABBREVIATIONS, scores blank if
+    the game hasn't been played yet. This is the historical game-SCORE
+    source for the whole app's rating model, replacing ESPN's scoreboard
+    `dates=` range-query endpoint: that endpoint turned out to have a much
+    more aggressive rate limit than ESPN's other endpoints (bare
+    /scoreboard, /teams, /injuries all kept working fine) -- a single
+    backtest run was enough to get it blocked for an extended period, even
+    from a home network, which makes it unusable as this app's core data
+    dependency. GitHub's release CDN doesn't have that problem."""
+    cache_key = "nflverse_games_csv"
+    cached = cache_get(cache_key, RATINGS_CACHE_TTL_SECONDS)
+    if cached is not None:
+        return cached
+    try:
+        resp = requests.get(GAMES_RELEASE_URL, timeout=TIMEOUT)
+        resp.raise_for_status()
+    except requests.RequestException:
+        return []
+    rows = list(csv.DictReader(io.StringIO(resp.text)))
+    cache_set(cache_key, rows)
+    return rows
+
+
+def get_season_games(season, game_type="REG", completed_only=True):
+    """[{"home", "away", "home_score", "away_score"}] for one season, full
+    team names -- same shape espn_client's game-score functions return, so
+    this is a drop-in swap for that data source."""
+    games = []
+    for row in _fetch_all_games():
+        if row.get("game_type") != game_type:
+            continue
+        try:
+            if int(row.get("season") or 0) != season:
+                continue
+        except (TypeError, ValueError):
+            continue
+        home_score, away_score = row.get("home_score"), row.get("away_score")
+        if completed_only and (not home_score or not away_score):
+            continue
+        home_name = TEAM_ABBR_TO_NAME.get(row.get("home_team"))
+        away_name = TEAM_ABBR_TO_NAME.get(row.get("away_team"))
+        if not home_name or not away_name:
+            continue
+        try:
+            games.append({
+                "home": home_name, "away": away_name,
+                "home_score": int(float(home_score)), "away_score": int(float(away_score)),
+            })
+        except (TypeError, ValueError):
+            continue
+    return games
 
 
 def _fetch_team_week_rows(season):
