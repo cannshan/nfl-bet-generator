@@ -25,6 +25,19 @@ BASE_URL = "https://api.sportsgameodds.com/v2"
 TIMEOUT = 20
 CACHE_TTL_SECONDS = 10 * 60
 
+# sportsgameodds' player-prop statID -> this app's own player_props.py market
+# key (see player_props.MARKET_CONFIG). Verified against the real API with a
+# real key (not just docs) that all 7 markets this app uses have a match.
+STAT_ID_TO_MARKET_KEY = {
+    "passing_yards": "player_pass_yds",
+    "passing_attempts": "player_pass_attempts",
+    "passing_completions": "player_pass_completions",
+    "passing_touchdowns": "player_pass_tds",
+    "rushing_yards": "player_rush_yds",
+    "receiving_yards": "player_reception_yds",
+    "receiving_receptions": "player_receptions",
+}
+
 
 def is_configured():
     return bool(SPORTSGAMEODDS_API_KEY)
@@ -148,3 +161,108 @@ def get_game_odds():
             })
 
     return games
+
+
+def get_events_list():
+    """Drop-in replacement for The Odds API's get_events() -- needs an "id"
+    field (player_props.py looks up event odds by it) plus flat
+    "home_team"/"away_team" strings matching The Odds API's own event shape
+    (used as a fallback-matching key in get_event_props when the id
+    namespaces don't line up -- see there)."""
+    out = []
+    for e in _fetch_events():
+        if not e.get("eventID"):
+            continue
+        teams = e.get("teams", {})
+        out.append({
+            "id": e["eventID"],
+            "home_team": teams.get("home", {}).get("names", {}).get("long"),
+            "away_team": teams.get("away", {}).get("names", {}).get("long"),
+            "commence_time": _normalize_time(e.get("status", {}).get("startsAt")),
+            **e,
+        })
+    return out
+
+
+def get_event_props(event_id, markets, home_team=None, away_team=None):
+    """Drop-in replacement for The Odds API's get_event_odds(event_id, markets)
+    -- looks up the same cached event list get_events_list() already pulled
+    (no extra API call) and converts its player-prop odds into the exact
+    per-event shape player_props._consolidate_best_prices() expects:
+    {"home_team", "away_team", "commence_time", "bookmakers": [{"title",
+    "markets": [{"key", "outcomes": [{"description", "name", "point", "price"}]}]}]}.
+    `markets` is the same comma-separated The-Odds-API-style market key
+    string player_props.py already builds (DEFAULT_MARKETS) -- only those
+    markets are included.
+
+    The Odds API's /events endpoint is free (no quota cost), so it's common
+    for get_events() to still succeed with REAL Odds-API event ids even
+    while /odds (quota-limited) is failing -- meaning event_id here is often
+    in a completely different ID namespace than sportsgameodds' own events.
+    Falls back to matching by team names (both providers use the same full
+    team-name strings, e.g. "Buffalo Bills") when a direct id match fails.
+    """
+    wanted = set(markets.split(","))
+    all_events = _fetch_events()
+    event = next((e for e in all_events if e.get("eventID") == event_id), None)
+    if not event and home_team and away_team:
+        event = next(
+            (e for e in all_events
+             if e.get("teams", {}).get("home", {}).get("names", {}).get("long") == home_team
+             and e.get("teams", {}).get("away", {}).get("names", {}).get("long") == away_team),
+            None,
+        )
+    if not event:
+        return {}
+
+    teams = event.get("teams", {})
+    home_name = teams.get("home", {}).get("names", {}).get("long")
+    away_name = teams.get("away", {}).get("names", {}).get("long")
+    commence = _normalize_time(event.get("status", {}).get("startsAt"))
+    players = event.get("players", {})
+    odds = event.get("odds", {})
+
+    # (market_key, player_name) -> {"Over": odd_obj, "Under": odd_obj}
+    grouped = {}
+    for obj in odds.values():
+        market_key = STAT_ID_TO_MARKET_KEY.get(obj.get("statID"))
+        player_id = obj.get("playerID")
+        side = {"over": "Over", "under": "Under"}.get(obj.get("sideID"))
+        if not market_key or market_key not in wanted or not player_id or not side:
+            continue
+        player_name = players.get(player_id, {}).get("name")
+        if not player_name:
+            continue
+        grouped.setdefault((market_key, player_name), {})[side] = obj
+
+    # bookmaker -> market_key -> [outcomes]
+    by_bookmaker = {}
+    for (market_key, player_name), sides in grouped.items():
+        over_obj, under_obj = sides.get("Over"), sides.get("Under")
+        bk_names = set()
+        for obj in (over_obj, under_obj):
+            if obj:
+                bk_names |= set(obj.get("byBookmaker", {}).keys())
+        for bk in bk_names:
+            for obj, side in ((over_obj, "Over"), (under_obj, "Under")):
+                if not obj:
+                    continue
+                entry = obj.get("byBookmaker", {}).get(bk)
+                if not entry or entry.get("available") is False:
+                    continue
+                try:
+                    outcome = {
+                        "description": player_name, "name": side,
+                        "point": float(entry["overUnder"]), "price": int(entry["odds"]),
+                    }
+                except (KeyError, TypeError, ValueError):
+                    continue
+                by_bookmaker.setdefault(bk, {}).setdefault(market_key, []).append(outcome)
+
+    bookmakers = [
+        {"title": bk, "markets": [{"key": mk, "outcomes": outs} for mk, outs in mkts.items()]}
+        for bk, mkts in by_bookmaker.items()
+    ]
+    if not bookmakers:
+        return {}
+    return {"home_team": home_name, "away_team": away_name, "commence_time": commence, "bookmakers": bookmakers}

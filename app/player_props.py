@@ -294,7 +294,10 @@ def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None):
     candidates = []
     for event in events:
         try:
-            event_odds = odds_client.get_event_odds(event["id"], markets)
+            event_odds = odds_client.get_event_odds(
+                event["id"], markets,
+                home_team=event.get("home_team"), away_team=event.get("away_team"),
+            )
         except odds_client.OddsApiError:
             continue
 

@@ -36,7 +36,17 @@ TEAM_ABBR_TO_NAME = {
 }
 
 
-def _fetch_csv_rows(cache_key, url):
+def _fetch_csv_rows(cache_key, url, keep_fields=None):
+    """`keep_fields`, when given, trims each row to just those columns
+    before caching -- these CSVs are wide (the player-week release alone has
+    150 columns) and this app only ever reads a handful of them. This isn't
+    just a size optimization: a full, untrimmed ~4MB player-week payload was
+    observed to make Supabase's JSONB upsert hang well past a minute (see
+    cache_utils.MAX_CACHEABLE_BYTES), and since passive-mode page views
+    refuse to live-fetch on a cache miss, anything that fails to cache is
+    now PERMANENTLY unavailable on a plain page view, not just slower --
+    trimming to the ~10-20 fields actually used keeps every one of these
+    releases well under that cap so they reliably cache."""
     cached = cache_get(cache_key, RATINGS_CACHE_TTL_SECONDS)
     if cached is not None:
         return cached
@@ -53,8 +63,28 @@ def _fetch_csv_rows(cache_key, url):
 
     reader = csv.DictReader(io.StringIO(resp.text))
     rows = [row for row in reader if row.get("season_type") == "REG"]
+    if keep_fields:
+        rows = [{f: row.get(f) for f in keep_fields} for row in rows]
     cache_set(cache_key, rows)
     return rows
+
+
+# Only these columns are ever read from the player-week / team-week releases
+# (see build_player_index, compute_allowed_yardage, compute_net_epa_ratings,
+# and player_props.py/tracking.py's own field access) -- everything else in
+# the raw 150-/timing-column releases is dropped before caching.
+PLAYER_WEEK_FIELDS = [
+    "player_display_name", "week", "team", "opponent_team", "target_share",
+    "position_group", "def_tackles_solo", "def_tackles_with_assist",
+    "def_sacks", "def_interceptions", "passing_yards", "attempts",
+    "completions", "passing_tds", "rushing_yards", "receiving_yards",
+    "receptions",
+]
+TEAM_WEEK_FIELDS = [
+    "game_id", "team", "opponent_team", "passing_yards", "rushing_yards",
+    "passing_epa", "rushing_epa",
+]
+GAMES_FIELDS = ["season", "game_type", "home_team", "away_team", "home_score", "away_score"]
 
 
 def _fetch_all_games():
@@ -79,7 +109,10 @@ def _fetch_all_games():
         resp.raise_for_status()
     except requests.RequestException:
         return []
-    rows = list(csv.DictReader(io.StringIO(resp.text)))
+    rows = [
+        {f: row.get(f) for f in GAMES_FIELDS}
+        for row in csv.DictReader(io.StringIO(resp.text))
+    ]
     cache_set(cache_key, rows)
     return rows
 
@@ -117,12 +150,18 @@ def get_season_games(season, game_type="REG", completed_only=True):
 def _fetch_team_week_rows(season):
     """Downloads and parses the nflverse team-week stats CSV for a season.
     Returns [] if the season has no data yet (e.g. requesting next season early)."""
-    return _fetch_csv_rows(f"nflverse_stats_team_week_{season}", TEAM_RELEASE_URL.format(season=season))
+    return _fetch_csv_rows(
+        f"nflverse_stats_team_week_{season}", TEAM_RELEASE_URL.format(season=season),
+        keep_fields=TEAM_WEEK_FIELDS,
+    )
 
 
 def _fetch_player_week_rows(season):
     """Downloads and parses the nflverse player-week stats CSV for a season."""
-    return _fetch_csv_rows(f"nflverse_stats_player_week_{season}", PLAYER_RELEASE_URL.format(season=season))
+    return _fetch_csv_rows(
+        f"nflverse_stats_player_week_{season}", PLAYER_RELEASE_URL.format(season=season),
+        keep_fields=PLAYER_WEEK_FIELDS,
+    )
 
 
 def build_player_index(current_season):

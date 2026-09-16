@@ -74,47 +74,71 @@ def _handle_errors(resp):
 
 def get_events():
     """List this week's NFL events (id, teams, commence_time). Free/cheap call,
-    needed to look up event ids for the per-event player-props endpoint."""
-    _require_key()
+    needed to look up event ids for the per-event player-props endpoint.
+    Falls back to sportsgameodds_client on the same terms as get_odds()."""
     cache_key = "odds_events"
     cached = cache_get(cache_key, ODDS_CACHE_TTL_SECONDS)
     if cached is not None:
         return cached
     if not live_fetch_allowed():
         return []
-    resp = requests.get(
-        f"{ODDS_API_BASE}/sports/{SPORT_KEY}/events",
-        params={"apiKey": ODDS_API_KEY},
-        timeout=15,
-    )
-    _handle_errors(resp)
-    data = resp.json()
-    cache_set(cache_key, data)
-    return data
+
+    try:
+        _require_key()
+        resp = requests.get(
+            f"{ODDS_API_BASE}/sports/{SPORT_KEY}/events",
+            params={"apiKey": ODDS_API_KEY},
+            timeout=15,
+        )
+        _handle_errors(resp)
+        data = resp.json()
+        cache_set(cache_key, data)
+        return data
+    except OddsApiError as e:
+        if not sportsgameodds_client.is_configured():
+            raise
+        print(f"[odds_client] The Odds API unavailable ({e}) -- falling back to sportsgameodds.com for events")
+        data = sportsgameodds_client.get_events_list()
+        cache_set(cache_key, data)
+        return data
 
 
-def get_event_odds(event_id, markets, regions="us"):
+def get_event_odds(event_id, markets, regions="us", home_team=None, away_team=None):
     """Player props (and any other market) live on a per-event endpoint, unlike
     the bulk h2h/spreads/totals endpoint. Each market requested here costs API
-    credits, so keep the markets list intentionally small and rely on caching."""
-    _require_key()
+    credits, so keep the markets list intentionally small and rely on caching.
+    Falls back to sportsgameodds_client on the same terms as get_odds().
+    `home_team`/`away_team` are optional but recommended: The Odds API's
+    /events endpoint is free (no quota cost), so it commonly still succeeds
+    with REAL Odds-API event ids even while this quota-limited endpoint is
+    failing -- passing team names lets the fallback match by team instead of
+    by id when the id namespaces don't line up (see sportsgameodds_client)."""
     cache_key = f"event_odds_{event_id}_{markets}_{regions}"
     cached = cache_get(cache_key, ODDS_CACHE_TTL_SECONDS)
     if cached is not None:
         return cached
     if not live_fetch_allowed():
         return {}
-    resp = requests.get(
-        f"{ODDS_API_BASE}/sports/{SPORT_KEY}/events/{event_id}/odds",
-        params={
-            "apiKey": ODDS_API_KEY,
-            "regions": regions,
-            "markets": markets,
-            "oddsFormat": "american",
-        },
-        timeout=15,
-    )
-    _handle_errors(resp)
-    data = resp.json()
-    cache_set(cache_key, data)
-    return data
+
+    try:
+        _require_key()
+        resp = requests.get(
+            f"{ODDS_API_BASE}/sports/{SPORT_KEY}/events/{event_id}/odds",
+            params={
+                "apiKey": ODDS_API_KEY,
+                "regions": regions,
+                "markets": markets,
+                "oddsFormat": "american",
+            },
+            timeout=15,
+        )
+        _handle_errors(resp)
+        data = resp.json()
+        cache_set(cache_key, data)
+        return data
+    except OddsApiError as e:
+        if not sportsgameodds_client.is_configured():
+            raise
+        data = sportsgameodds_client.get_event_props(event_id, markets, home_team, away_team)
+        cache_set(cache_key, data)
+        return data

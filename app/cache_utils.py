@@ -15,15 +15,21 @@ from supabase import create_client, ClientOptions
 from app.config import SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 
 TABLE = "app_cache"
-# A ~4MB JSONB upsert (nflverse's player-week stats CSV, 1118 rows x 150
-# columns) was observed to take well over 2 minutes -- Postgres/PostgREST
-# apparently processes a large JSONB blob far slower than the raw byte count
-# would suggest, and this app's underlying sources (GitHub release CSVs,
-# ESPN) are already fast to fetch fresh (under ~1s even for a 7MB file), so
-# there's no good reason to risk stalling a whole page load caching
-# something this size. Skip caching anything over this; the caller just gets
-# a cache miss and re-fetches from source every time, which is fine here.
-MAX_CACHEABLE_BYTES = 1_000_000
+# A ~4MB JSONB upsert of nflverse's player-week stats CSV (1118 rows x its
+# full 150 columns) was observed to hang well past a minute. The real driver
+# turned out to be COLUMN WIDTH, not raw byte size: nflverse_client now
+# trims every wide release to the ~10-20 columns this app actually reads
+# before ever caching it (see PLAYER_WEEK_FIELDS etc.) -- a since-measured
+# trimmed payload nearly double the original's byte size (7MB, 18540 narrow
+# rows for a full season) cached in ~19s, not a hang. This cap is a second
+# line of defense against some future payload that's wide OR just enormous;
+# raised from the original 1MB (which was blocking legitimate, safe-to-cache
+# payloads like the trimmed player/team/games releases) now that the actual
+# cause is understood and addressed at the source. Passive-mode page views
+# never hit this path at all (they only read already-cached data, which is
+# fast regardless of size -- ~1s even for the 7MB example above); this only
+# matters for the write that happens during an explicit refresh.
+MAX_CACHEABLE_BYTES = 10_000_000
 _client = None
 
 # Two modes, controlling whether an external API call is allowed at all:
@@ -58,7 +64,7 @@ def _sb():
     if _client is None:
         _client = create_client(
             SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
-            options=ClientOptions(postgrest_client_timeout=20),
+            options=ClientOptions(postgrest_client_timeout=45),
         )
     return _client
 
