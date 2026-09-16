@@ -16,12 +16,18 @@ Also tracks closing line value (CLV) -- whether the suggested price beat the
 market's own closing number -- since that's a faster, sharp-betting-standard
 skill signal that doesn't need to wait for a game's outcome, just for the
 line to move. See capture_closing_lines().
+
+Storage: Supabase (Postgres), table `nfl_predictions`, in a project shared
+with other unrelated apps -- this table name is deliberately namespaced so
+it can't collide with anything else living in that same database. Uses the
+service_role key since this module only ever runs server-side and there's
+no per-user auth in this app (Row Level Security bypass is intentional).
 """
 import datetime as dt
 import re
-import sqlite3
 from collections import defaultdict
-from app.config import PREDICTIONS_DB_PATH
+from supabase import create_client
+from app.config import SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 from app import espn_client, nflverse_client
 
 SETTLEMENT_DELAY_HOURS = 4  # wait this long past kickoff so final stats have posted
@@ -29,87 +35,52 @@ CALIBRATION_BUCKETS = [(0.5, 0.6), (0.6, 0.7), (0.7, 0.8), (0.8, 0.9), (0.9, 1.0
 MIN_SAMPLE_FOR_CONFIDENCE = 20  # below this, don't imply the numbers mean much yet
 MIN_SAMPLE_FOR_CLV_CONFIDENCE = 200  # sharp-betting convention: CLV needs a bigger sample than raw hit rate to mean much
 
+TABLE = "nfl_predictions"
 
-def _connect():
-    conn = sqlite3.connect(str(PREDICTIONS_DB_PATH))
-    conn.row_factory = sqlite3.Row
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS predictions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TEXT NOT NULL,
-            season INTEGER,
-            week INTEGER,
-            home_team TEXT,
-            away_team TEXT,
-            commence_time TEXT,
-            market TEXT,
-            selection TEXT,
-            player TEXT,
-            stat_category TEXT,
-            side TEXT,
-            line REAL,
-            american_odds INTEGER,
-            decimal_odds REAL,
-            bookmaker TEXT,
-            model_prob REAL,
-            book_fair_prob REAL,
-            edge REAL,
-            section TEXT,
-            status TEXT NOT NULL DEFAULT 'pending',
-            actual_value REAL,
-            settled_at TEXT,
-            UNIQUE(home_team, away_team, commence_time, market, selection)
-        )
-        """
-    )
-    # Added after the table already existed in the wild -- ALTER TABLE rather
-    # than baking into CREATE TABLE so existing predictions.db files pick this
-    # up without needing to be dropped/recreated.
-    for col, decl in [
-        ("closing_decimal_odds", "REAL"),
-        ("closing_american_odds", "INTEGER"),
-        ("closing_selection", "TEXT"),
-        ("closing_captured_at", "TEXT"),
-    ]:
-        try:
-            conn.execute(f"ALTER TABLE predictions ADD COLUMN {col} {decl}")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-    return conn
+_client = None
+
+
+def _sb():
+    global _client
+    if _client is None:
+        _client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    return _client
 
 
 def log_suggestions(legs, season, week, section):
     """Records each leg the FIRST time it's suggested; later refreshes that
-    re-suggest the same bet are silently ignored (UNIQUE constraint) so the
-    log reflects what was said before the outcome was known, not a
-    constantly-overwritten latest guess."""
+    re-suggest the same bet are silently ignored (unique constraint + upsert
+    ignore_duplicates) so the log reflects what was said before the outcome
+    was known, not a constantly-overwritten latest guess."""
     if not legs:
         return
-    conn = _connect()
     now = dt.datetime.utcnow().isoformat()
+    rows = []
     for leg in legs:
         if " @ " not in leg.get("matchup", ""):
             continue
         away, home = leg["matchup"].split(" @ ", 1)
-        try:
-            conn.execute(
-                """INSERT OR IGNORE INTO predictions
-                (created_at, season, week, home_team, away_team, commence_time, market, selection,
-                 player, stat_category, side, line, american_odds, decimal_odds, bookmaker,
-                 model_prob, book_fair_prob, edge, section)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    now, season, week, home, away, leg.get("commence_time"), leg["market"], leg["selection"],
-                    leg.get("player"), leg.get("stat_category"), leg.get("side"), leg.get("line"),
-                    leg["american_odds"], leg["decimal_odds"], leg["bookmaker"],
-                    leg["model_prob"], leg["book_fair_prob"], leg["edge"], section,
-                ),
-            )
-        except sqlite3.Error:
-            continue
-    conn.commit()
-    conn.close()
+        rows.append({
+            "created_at": now, "season": season, "week": week,
+            "home_team": home, "away_team": away, "commence_time": leg.get("commence_time"),
+            "market": leg["market"], "selection": leg["selection"],
+            "player": leg.get("player"), "stat_category": leg.get("stat_category"),
+            "side": leg.get("side"), "line": leg.get("line"),
+            "american_odds": leg["american_odds"], "decimal_odds": leg["decimal_odds"],
+            "bookmaker": leg["bookmaker"], "model_prob": leg["model_prob"],
+            "book_fair_prob": leg["book_fair_prob"], "edge": leg["edge"],
+            "section": section, "status": "pending",
+        })
+    if not rows:
+        return
+    try:
+        _sb().table(TABLE).upsert(
+            rows,
+            on_conflict="home_team,away_team,commence_time,market,selection",
+            ignore_duplicates=True,
+        ).execute()
+    except Exception:
+        pass
 
 
 def _parse_commence(iso_str):
@@ -221,14 +192,16 @@ def capture_closing_lines(pool):
     CLV is about the PRICE you'd get for the same bet now, not whether the
     exact number is identical to what was first shown.
     """
-    conn = _connect()
     now = dt.datetime.now(dt.timezone.utc)
-    candidates_rows = conn.execute(
-        "SELECT * FROM predictions WHERE closing_captured_at IS NULL OR commence_time > ?",
-        (now.isoformat(),),
-    ).fetchall()
+    try:
+        candidates_rows = (
+            _sb().table(TABLE).select("*")
+            .or_(f"closing_captured_at.is.null,commence_time.gt.{now.isoformat()}")
+            .execute()
+        ).data
+    except Exception:
+        return 0
     if not candidates_rows:
-        conn.close()
         return 0
 
     by_matchup_market = defaultdict(list)
@@ -273,15 +246,17 @@ def capture_closing_lines(pool):
         if not live_matches:
             continue
         best = max(live_matches, key=lambda l: l["decimal_odds"])
-        conn.execute(
-            """UPDATE predictions SET closing_decimal_odds=?, closing_american_odds=?,
-               closing_selection=?, closing_captured_at=? WHERE id=?""",
-            (best["decimal_odds"], best["american_odds"], best["selection"], now.isoformat(), row["id"]),
-        )
-        updated += 1
+        try:
+            _sb().table(TABLE).update({
+                "closing_decimal_odds": best["decimal_odds"],
+                "closing_american_odds": best["american_odds"],
+                "closing_selection": best["selection"],
+                "closing_captured_at": now.isoformat(),
+            }).eq("id", row["id"]).execute()
+            updated += 1
+        except Exception:
+            continue
 
-    conn.commit()
-    conn.close()
     return updated
 
 
@@ -290,9 +265,11 @@ def settle_pending():
     than SETTLEMENT_DELAY_HOURS ago. Safe to call on every page load --
     anything without final data available yet is simply left pending and
     retried next time. Returns how many were newly settled."""
-    conn = _connect()
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=SETTLEMENT_DELAY_HOURS)
-    pending = conn.execute("SELECT * FROM predictions WHERE status = 'pending'").fetchall()
+    try:
+        pending = _sb().table(TABLE).select("*").eq("status", "pending").execute().data
+    except Exception:
+        return 0
 
     games_by_season = {}
     players_by_season = {}
@@ -326,26 +303,26 @@ def settle_pending():
         if status is None:
             continue  # data not posted yet -- leave pending, retry on a later refresh
 
-        conn.execute(
-            "UPDATE predictions SET status=?, actual_value=?, settled_at=? WHERE id=?",
-            (status, actual, dt.datetime.utcnow().isoformat(), row["id"]),
-        )
-        settled_count += 1
+        try:
+            _sb().table(TABLE).update({
+                "status": status, "actual_value": actual,
+                "settled_at": dt.datetime.utcnow().isoformat(),
+            }).eq("id", row["id"]).execute()
+            settled_count += 1
+        except Exception:
+            continue
 
-    conn.commit()
-    conn.close()
     return settled_count
 
 
 def get_track_record(stake=5.0):
-    conn = _connect()
-    settled = conn.execute("SELECT * FROM predictions WHERE status IN ('hit', 'miss')").fetchall()
-    pending_count = conn.execute("SELECT COUNT(*) c FROM predictions WHERE status='pending'").fetchone()["c"]
-    void_count = conn.execute("SELECT COUNT(*) c FROM predictions WHERE status='void'").fetchone()["c"]
-    with_clv = conn.execute(
-        "SELECT * FROM predictions WHERE closing_decimal_odds IS NOT NULL"
-    ).fetchall()
-    conn.close()
+    try:
+        settled = _sb().table(TABLE).select("*").in_("status", ["hit", "miss"]).execute().data
+        pending_count = len(_sb().table(TABLE).select("id").eq("status", "pending").execute().data)
+        void_count = len(_sb().table(TABLE).select("id").eq("status", "void").execute().data)
+        with_clv = _sb().table(TABLE).select("*").not_.is_("closing_decimal_odds", "null").execute().data
+    except Exception:
+        settled, pending_count, void_count, with_clv = [], 0, 0, []
 
     total = len(settled)
     hits = sum(1 for r in settled if r["status"] == "hit")

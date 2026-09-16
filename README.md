@@ -128,18 +128,22 @@ against the real result once the game is played — see below.
   running `run.py` for visibility.
 - **Track Record (automatic, no manual bet logging)**: every leg actually
   shown on the page — same-game and best-odds sections both — gets recorded
-  in a local SQLite database (`data/predictions.db`) the moment it's
-  suggested. On every later page load, any pending prediction whose game
-  started more than 4 hours ago gets checked against the real result:
-  final score from ESPN for game-level bets, final box-score stat from
-  nflverse for player props. Nothing to do on your end — it just accumulates.
-  The **Track Record** tab shows total settled/pending, overall hit rate,
-  straight-bet ROI, a calibration table (does a "70% pick" actually hit
-  ~70% of the time, broken out by probability range), and the most recently
-  settled bets. Explicitly does NOT feed results back into the model yet —
-  with only a handful of settled bets at first, auto-recalibration would
-  just be overfitting to noise. The report itself says so plainly (a visible
-  "too small a sample" warning) until at least 20 bets have settled.
+  in a Supabase (Postgres) table (`nfl_predictions`) the moment it's
+  suggested — see `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` below and
+  `supabase_setup.sql` for the one-time table setup. On every later page
+  load, any pending prediction whose game started more than 4 hours ago gets
+  checked against the real result: final score from ESPN for game-level
+  bets, final box-score stat from nflverse for player props. Nothing to do
+  on your end — it just accumulates. The **Track Record** tab shows total
+  settled/pending, overall hit rate, straight-bet ROI, a calibration table
+  (does a "70% pick" actually hit ~70% of the time, broken out by
+  probability range), closing line value (CLV — did the suggested price
+  beat the market's own closing number, a faster skill signal than
+  win/loss), and the most recently settled bets. Explicitly does NOT feed
+  results back into the model yet — with only a handful of settled bets at
+  first, auto-recalibration would just be overfitting to noise. The report
+  itself says so plainly (a visible "too small a sample" warning) until at
+  least 20 bets have settled (200+ for CLV).
 - **Current rosters, not just historical stats**: ESPN's team roster endpoints
   (32 teams, cached 12 hours) are the source of truth for "which team is this
   player on right now." This matters because nflverse's weekly-stats data only
@@ -196,20 +200,26 @@ against the real result once the game is played — see below.
 
 1. Get a free API key at [the-odds-api.com](https://the-odds-api.com) (free
    tier: 500 requests/month — plenty for personal use with caching).
-2. Copy `.env.example` to `.env` and paste your key in:
+2. Create a free project at [supabase.com](https://supabase.com) (used for
+   the persistent prediction-tracking table, not the live odds/stats). In
+   its SQL Editor, run `supabase_setup.sql` once. Then, from that project's
+   Settings -> API page, grab the Project URL and `service_role` key.
+3. Copy `.env.example` to `.env` and fill in:
    ```
    ODDS_API_KEY=your_key_here
+   SUPABASE_URL=your_project_url
+   SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
    ```
    Optionally add `ANTHROPIC_API_KEY=your_key_here` too, to enable live expert
    insight (see below) — the app works fine without it, just without that
    one section.
-3. Install dependencies:
+4. Install dependencies:
    ```bash
    python -m venv .venv
    .venv\Scripts\activate
    pip install -r requirements.txt
    ```
-4. Run it:
+5. Run it:
    ```bash
    python run.py
    ```

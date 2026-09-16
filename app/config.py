@@ -13,14 +13,11 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ANTHROPIC_API_BASE = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+
 CACHE_DIR = BASE_DIR / "cache"
 CACHE_DIR.mkdir(exist_ok=True)
-
-# Persistent (never cache-cleared) storage for the prediction track record --
-# unlike cache/, this is meant to accumulate indefinitely, not expire.
-DATA_DIR = BASE_DIR / "data"
-DATA_DIR.mkdir(exist_ok=True)
-PREDICTIONS_DB_PATH = DATA_DIR / "predictions.db"
 
 ODDS_CACHE_TTL_SECONDS = 10 * 60
 RATINGS_CACHE_TTL_SECONDS = 6 * 60 * 60
