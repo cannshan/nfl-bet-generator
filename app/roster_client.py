@@ -11,7 +11,7 @@ stat row's 'team' field.
 """
 import requests
 from app.config import ESPN_API_BASE
-from app.cache_utils import cache_get, cache_set
+from app.cache_utils import cache_get, cache_set, live_fetch_allowed
 from app.espn_client import HEADERS
 
 TIMEOUT = 15
@@ -24,6 +24,8 @@ def get_current_rosters():
     cached = cache_get("espn_current_rosters", CACHE_TTL_SECONDS)
     if cached is not None:
         return cached
+    if not live_fetch_allowed():
+        return {}
 
     try:
         resp = requests.get(f"{ESPN_API_BASE}/teams", params={"limit": 40}, timeout=TIMEOUT, headers=HEADERS)
@@ -67,6 +69,8 @@ def get_qb_depth_charts():
     cached = cache_get("espn_qb_depth_charts", CACHE_TTL_SECONDS)
     if cached is not None:
         return cached
+    if not live_fetch_allowed():
+        return {}
 
     try:
         resp = requests.get(f"{ESPN_API_BASE}/teams", params={"limit": 40}, timeout=TIMEOUT, headers=HEADERS)

@@ -14,6 +14,10 @@
       <a href="/track-record" class="tab active">Track Record</a>
     </nav>
   </header>
+  <p class="meta">
+    This page never makes a live call on its own either — it only checks pending bets against real
+    results when you <a href="{{ url_for('refresh_settlements') }}">check for new results</a>.
+  </p>
 
   <section class="stat-row">
     <div class="stat-tile">

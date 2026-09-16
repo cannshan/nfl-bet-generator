@@ -1,6 +1,6 @@
 import requests
 from app.config import ODDS_API_KEY, ODDS_API_BASE, ODDS_CACHE_TTL_SECONDS
-from app.cache_utils import cache_get, cache_set
+from app.cache_utils import cache_get, cache_set, live_fetch_allowed
 
 SPORT_KEY = "americanfootball_nfl"
 
@@ -17,6 +17,8 @@ def get_odds(markets="h2h,spreads,totals", regions="us"):
     cached = cache_get(cache_key, ODDS_CACHE_TTL_SECONDS)
     if cached is not None:
         return cached
+    if not live_fetch_allowed():
+        return []
 
     url = f"{ODDS_API_BASE}/sports/{SPORT_KEY}/odds/"
     params = {
@@ -64,6 +66,8 @@ def get_events():
     cached = cache_get(cache_key, ODDS_CACHE_TTL_SECONDS)
     if cached is not None:
         return cached
+    if not live_fetch_allowed():
+        return []
     resp = requests.get(
         f"{ODDS_API_BASE}/sports/{SPORT_KEY}/events",
         params={"apiKey": ODDS_API_KEY},
@@ -84,6 +88,8 @@ def get_event_odds(event_id, markets, regions="us"):
     cached = cache_get(cache_key, ODDS_CACHE_TTL_SECONDS)
     if cached is not None:
         return cached
+    if not live_fetch_allowed():
+        return {}
     resp = requests.get(
         f"{ODDS_API_BASE}/sports/{SPORT_KEY}/events/{event_id}/odds",
         params={

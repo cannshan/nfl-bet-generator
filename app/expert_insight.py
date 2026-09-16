@@ -15,7 +15,7 @@ import json
 import re
 import requests
 from app.config import ANTHROPIC_API_KEY, ANTHROPIC_API_BASE, ANTHROPIC_MODEL
-from app.cache_utils import cache_get, cache_set
+from app.cache_utils import cache_get, cache_set, live_fetch_allowed
 
 TIMEOUT = 90
 CACHE_TTL_SECONDS = 4 * 60 * 60
@@ -59,6 +59,8 @@ def get_expert_insight(matchup, players, commence_time=None):
     cached = cache_get(cache_key, CACHE_TTL_SECONDS)
     if cached is not None:
         return cached
+    if not live_fetch_allowed():
+        return []
 
     player_list = ", ".join(players)
     when = f" on {commence_time}" if commence_time else ""

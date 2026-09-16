@@ -13,7 +13,7 @@ TDs, etc. show up in the score but don't reflect true team strength).
 import csv
 import io
 import requests
-from app.cache_utils import cache_get, cache_set
+from app.cache_utils import cache_get, cache_set, live_fetch_allowed
 from app.config import RATINGS_CACHE_TTL_SECONDS
 
 TEAM_RELEASE_URL = "https://github.com/nflverse/nflverse-data/releases/download/stats_team/stats_team_week_{season}.csv"
@@ -40,6 +40,8 @@ def _fetch_csv_rows(cache_key, url):
     cached = cache_get(cache_key, RATINGS_CACHE_TTL_SECONDS)
     if cached is not None:
         return cached
+    if not live_fetch_allowed():
+        return []
     try:
         resp = requests.get(url, timeout=TIMEOUT)
         if resp.status_code == 404:
@@ -70,6 +72,8 @@ def _fetch_all_games():
     cached = cache_get(cache_key, RATINGS_CACHE_TTL_SECONDS)
     if cached is not None:
         return cached
+    if not live_fetch_allowed():
+        return []
     try:
         resp = requests.get(GAMES_RELEASE_URL, timeout=TIMEOUT)
         resp.raise_for_status()

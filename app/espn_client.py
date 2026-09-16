@@ -2,7 +2,7 @@ import calendar
 import datetime as dt
 import requests
 from app.config import ESPN_API_BASE
-from app.cache_utils import cache_get, cache_set
+from app.cache_utils import cache_get, cache_set, live_fetch_allowed
 
 TIMEOUT = 15
 REGULAR_SEASON_WEEKS = 18
@@ -31,6 +31,8 @@ def get_current_scoreboard():
     cached = cache_get(cache_key, 60 * 30)
     if cached is not None:
         return cached
+    if not live_fetch_allowed():
+        return {}
     resp = requests.get(f"{ESPN_API_BASE}/scoreboard", timeout=TIMEOUT, headers=HEADERS)
     resp.raise_for_status()
     data = resp.json()

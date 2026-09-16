@@ -11,7 +11,7 @@ rough, transparent heuristics, not a fitted model.
 """
 import datetime as dt
 import requests
-from app.cache_utils import cache_get, cache_set
+from app.cache_utils import cache_get, cache_set, live_fetch_allowed
 
 TIMEOUT = 15
 CACHE_TTL_SECONDS = 3 * 60 * 60
@@ -89,6 +89,8 @@ def get_game_weather(home_team, commence_time_iso):
     cached = cache_get(cache_key, CACHE_TTL_SECONDS)
     if cached is not None:
         return cached
+    if not live_fetch_allowed():
+        return None
 
     try:
         resp = requests.get(

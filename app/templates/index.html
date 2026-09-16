@@ -20,7 +20,10 @@
 
   {% if offensive_injuries %}
   <details class="injuries-details">
-    <summary>🏥 Offensive injury report ({{ offensive_injuries|length }} players) — click to expand</summary>
+    <summary>
+      🏥 Offensive injury report ({{ offensive_injuries|length }} players) — click to expand
+      <a class="refresh-injuries-link" href="{{ url_for('refresh_injuries', stake=stake, target=target, props=1 if include_props else 0, insight=1 if include_insight else 0) }}" onclick="event.stopPropagation()">↻ Refresh injury report</a>
+    </summary>
     <div class="injuries-table-wrap">
       <table id="injuries-table" class="injuries-table">
         <thead>
@@ -72,7 +75,7 @@
   </script>
   {% endif %}
 
-  <form class="controls" method="get">
+  <form class="controls" method="get" action="{{ url_for('refresh_bets') }}">
     <label>Stake ($)
       <input type="number" name="stake" step="0.5" value="{{ stake }}">
     </label>
@@ -91,10 +94,19 @@
       </label>
       <input type="hidden" name="insight" value="0" style="display:none">
     {% endif %}
-    <button type="submit">Refresh</button>
+    <button type="submit">Refresh Bets</button>
   </form>
+  <p class="meta">
+    Viewing this page never makes a live API call — it only ever shows what's already cached (however
+    old). Click <strong>Refresh Bets</strong> to actually pull current odds and rebuild everything.
+  </p>
 
-  {% if error %}
+  {% if never_refreshed %}
+    <div class="meta" style="margin-bottom:20px;">
+      Nothing's been loaded yet on this deployment. Click <strong>Refresh Bets</strong> above to pull
+      today's odds for the first time.
+    </div>
+  {% elif error %}
     <div class="error">
       <strong>Couldn't load live data:</strong> {{ error }}
       <p>If this mentions an API key, get a free one at

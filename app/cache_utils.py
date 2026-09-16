@@ -26,6 +26,32 @@ TABLE = "app_cache"
 MAX_CACHEABLE_BYTES = 1_000_000
 _client = None
 
+# Two modes, controlling whether an external API call is allowed at all:
+#
+# "passive" (the default, used for a plain page view): cache_get ignores
+# ttl_seconds entirely and returns cached data at ANY age, and
+# live_fetch_allowed() is False -- every fetch function's cache-miss branch
+# must skip the live call and return an empty/None default instead. A plain
+# page load must never make an outbound API call, no matter how stale the
+# cache is.
+#
+# "active" (used only inside an explicit refresh route, e.g. "Refresh Bets"
+# or "Refresh Injury Report"): cache_get behaves normally (respects
+# ttl_seconds, so still-fresh data isn't needlessly re-fetched even during a
+# refresh), and live_fetch_allowed() is True, so a genuinely stale/missing
+# cache entry triggers a real fetch.
+_MODE = "passive"
+
+
+def set_mode(mode):
+    assert mode in ("passive", "active")
+    global _MODE
+    _MODE = mode
+
+
+def live_fetch_allowed():
+    return _MODE == "active"
+
 
 def _sb():
     global _client
@@ -45,7 +71,7 @@ def cache_get(key, ttl_seconds):
     if not rows:
         return None
     row = rows[0]
-    if time.time() - row["cached_at"] > ttl_seconds:
+    if _MODE == "active" and time.time() - row["cached_at"] > ttl_seconds:
         return None
     return row["data"]
 

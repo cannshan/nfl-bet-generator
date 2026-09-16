@@ -11,7 +11,7 @@ discount for "Questionable" rather than pretend the model already knows.
 """
 import requests
 from app.config import ESPN_API_BASE
-from app.cache_utils import cache_get, cache_set
+from app.cache_utils import cache_get, cache_set, live_fetch_allowed
 from app.espn_client import HEADERS
 
 TIMEOUT = 15
@@ -33,6 +33,8 @@ def _fetch_raw_entries():
     cached = cache_get(cache_key, INJURY_CACHE_TTL_SECONDS)
     if cached is not None:
         return cached
+    if not live_fetch_allowed():
+        return []
 
     try:
         resp = requests.get(f"{ESPN_API_BASE}/injuries", timeout=TIMEOUT, headers=HEADERS)

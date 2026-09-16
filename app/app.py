@@ -1,6 +1,6 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, redirect, url_for
 from app.config import DEFAULT_STAKE, DEFAULT_TARGET_PAYOUT
-from app import value_finder, odds_client, game_cards, parlay_builder, expert_insight, injury_client, tracking
+from app import value_finder, odds_client, game_cards, parlay_builder, expert_insight, injury_client, tracking, cache_utils
 
 # static_folder points at the repo-root public/ directory (Vercel's
 # convention -- it serves public/** from its CDN and Flask's own
@@ -43,21 +43,30 @@ def _record_suggestions(cards, best_odds_parlays, season, week):
         pass
 
 
-@app.route("/")
-def dashboard():
-    stake = request.args.get("stake", type=float) or DEFAULT_STAKE
-    target = request.args.get("target", type=float) or DEFAULT_TARGET_PAYOUT
-    include_props = request.args.get("props", "1") != "0"
-    include_insight = request.args.get("insight", "1") != "0"
+def _dashboard_params():
+    return (
+        request.args.get("stake", type=float) or DEFAULT_STAKE,
+        request.args.get("target", type=float) or DEFAULT_TARGET_PAYOUT,
+        request.args.get("props", "1") != "0",
+        request.args.get("insight", "1") != "0",
+    )
 
+
+def _run_bets_pipeline(stake, target, include_props, include_insight):
+    """The live-data pipeline: settle old predictions, pull odds/model data,
+    build cards/parlays, log new suggestions, capture closing lines. Every
+    external fetch inside this call chain checks cache_utils.live_fetch_allowed()
+    before ever touching a network -- so this is safe to call from a plain
+    page view (cache_utils mode 'passive': nothing live happens, whatever's
+    cached gets reused regardless of age) as well as from an explicit
+    refresh action (mode 'active': stale/missing cache entries actually
+    refetch). Callers are responsible for setting the mode first."""
     error = None
     pool, meta, cards, best_odds_parlays = [], {}, [], []
-
     try:
         tracking.settle_pending()
     except Exception:
         pass
-
     try:
         _value_bets, pool, meta = value_finder.get_value_bets_and_pool(include_props=include_props)
         if meta.get("error"):
@@ -74,10 +83,31 @@ def dashboard():
         error = str(e)
     except Exception as e:  # surface any other failure plainly rather than a blank page
         error = f"Something went wrong pulling live data: {e}"
+    return error, cards, best_odds_parlays, meta
+
+
+@app.route("/")
+def dashboard():
+    """Plain page view -- NEVER makes a live API call, no matter how old the
+    cache is. Only the /refresh-bets and /refresh-injuries routes are allowed
+    to actually fetch anything; this just renders whatever's already cached
+    (or an empty "click refresh" state on a brand new deployment)."""
+    stake, target, include_props, include_insight = _dashboard_params()
+    cache_utils.set_mode("passive")
+
+    error, cards, best_odds_parlays, meta = _run_bets_pipeline(stake, target, include_props, include_insight)
+
+    # In passive mode a missing-data "error" almost always just means nothing
+    # has ever been refreshed yet on this deployment, not a real failure --
+    # a genuine API/network failure can only happen during an active refresh.
+    never_refreshed = bool(error) and "No historical game data" in (error or "")
+    if never_refreshed:
+        error = None
 
     return render_template(
         "index.html",
         error=error,
+        never_refreshed=never_refreshed,
         game_cards=cards,
         best_odds_parlays=best_odds_parlays,
         meta=meta,
@@ -90,13 +120,61 @@ def dashboard():
     )
 
 
+@app.route("/refresh-bets")
+def refresh_bets():
+    """The ONLY thing that triggers live odds/model/expert-insight calls.
+    Runs the fetch pipeline in 'active' mode (refetches whatever's actually
+    stale, reuses whatever's still fresh) purely to warm the cache, then
+    redirects back to / so the URL and any later reload stay on the cheap,
+    cache-only path."""
+    stake, target, include_props, include_insight = _dashboard_params()
+    cache_utils.set_mode("active")
+    try:
+        _run_bets_pipeline(stake, target, include_props, include_insight)
+    finally:
+        cache_utils.set_mode("passive")
+    return redirect(url_for(
+        "dashboard", stake=stake, target=target,
+        props=1 if include_props else 0, insight=1 if include_insight else 0,
+    ))
+
+
+@app.route("/refresh-injuries")
+def refresh_injuries():
+    """Separate, lightweight refresh for just the injury report -- free
+    (ESPN, no quota), so this lets you check for injury news without
+    spending any odds-quota re-fetching everything else. Note: the model's
+    own injury-based adjustments (QB-out penalty, prop discounts) won't
+    reflect this until the next /refresh-bets."""
+    cache_utils.set_mode("active")
+    try:
+        injury_client.get_offensive_injuries()
+    finally:
+        cache_utils.set_mode("passive")
+    return redirect(url_for("dashboard", **request.args))
+
+
 @app.route("/track-record")
 def track_record():
+    cache_utils.set_mode("passive")
     try:
         tracking.settle_pending()
     except Exception:
         pass
     return render_template("track_record.html", record=tracking.get_track_record())
+
+
+@app.route("/refresh-settlements")
+def refresh_settlements():
+    """Checks pending predictions against real results -- free (ESPN via
+    nflverse, no odds-quota involved), separate from /refresh-bets so
+    checking for results never costs anything."""
+    cache_utils.set_mode("active")
+    try:
+        tracking.settle_pending()
+    finally:
+        cache_utils.set_mode("passive")
+    return redirect(url_for("track_record"))
 
 
 def _leg_signature(d):
@@ -126,6 +204,10 @@ def redo_leg():
     if not matchup:
         return jsonify({"error": "Missing matchup."}), 400
 
+    # Passive: pick from whatever's already cached rather than spending a
+    # fresh odds-API call just to redo one leg -- click "Refresh Bets" first
+    # if you want this to consider genuinely new lines.
+    cache_utils.set_mode("passive")
     try:
         _value_bets, pool, meta = value_finder.get_value_bets_and_pool()
     except Exception as e:
@@ -167,19 +249,6 @@ def redo_leg():
     template = app.jinja_env.get_template("_leg.html")
     html = template.module.render_leg(candidate, show_matchup=show_matchup)
     return jsonify({"leg": candidate, "html": str(html)})
-
-
-@app.route("/api/refresh")
-def api_refresh():
-    stake = request.args.get("stake", type=float) or DEFAULT_STAKE
-    target = request.args.get("target", type=float) or DEFAULT_TARGET_PAYOUT
-    try:
-        _value_bets, pool, meta = value_finder.get_value_bets_and_pool()
-        cards = game_cards.build_game_cards(pool, stake, target) if pool else []
-        best_odds_parlays = parlay_builder.find_best_odds_parlays(pool, stake, target) if pool else []
-        return jsonify({"game_cards": cards, "best_odds_parlays": best_odds_parlays, "meta": meta})
-    except odds_client.OddsApiError as e:
-        return jsonify({"error": str(e)}), 400
 
 
 if __name__ == "__main__":
