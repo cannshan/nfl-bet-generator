@@ -1,3 +1,18 @@
+from app.config import BOOKMAKER_KEY
+
+
+def is_offer_book(bookmaker):
+    """Whether a feed bookmaker entry is the one book legs are offered at
+    (config.BOOKMAKER_KEY). Matches the Odds API key, and falls back to the
+    title for the fallback feed (which has titles only), so e.g. "DraftKings"
+    still matches "draftkings". Everything matches when no book is set."""
+    if not BOOKMAKER_KEY:
+        return True
+    key = (bookmaker.get("key") or "").lower()
+    title = (bookmaker.get("title") or "").lower().replace(" ", "")
+    return key == BOOKMAKER_KEY or title == BOOKMAKER_KEY
+
+
 def american_to_decimal(american):
     american = float(american)
     if american > 0:

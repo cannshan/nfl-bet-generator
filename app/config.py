@@ -20,6 +20,15 @@ SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 # its quota is exhausted -- see sportsgameodds_client.py.
 SPORTSGAMEODDS_API_KEY = os.environ.get("SPORTSGAMEODDS_API_KEY", "")
 
+# The ONE sportsbook every leg is offered at. The fair-value reference for
+# a bet still comes from the consensus across every book in the feed (that
+# is what tells you when this book's price is off), but the line, price and
+# payout shown are only ever this book's -- so the ticket is one you can
+# actually place, not a best-price patchwork across a dozen apps. The Odds
+# API bookmaker key ("draftkings", "fanduel", "betmgm", ...); leave empty
+# to shop every book instead.
+BOOKMAKER_KEY = os.environ.get("BOOKMAKER_KEY", "draftkings").strip().lower()
+
 ODDS_CACHE_TTL_SECONDS = 10 * 60
 RATINGS_CACHE_TTL_SECONDS = 6 * 60 * 60
 

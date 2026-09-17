@@ -133,7 +133,7 @@
 
   {% if best_odds_parlays %}
   <section>
-    <h2>Statistically Best Bets (${{ stake }} → ~${{ target|round(0) }})</h2>
+    <h2>Statistically Best Bets (${{ stake }} → ~${{ target|round(0) }}){% if offer_book %} <span class="offer-book">· {{ offer_book }} lines &amp; prices</span>{% endif %}</h2>
     <div class="parlay-grid">
       {% for p in best_odds_parlays %}
       <div class="parlay-card" data-stake="{{ stake }}">
@@ -150,7 +150,7 @@
         </div>
         <div class="odds-line">
           <span class="combined-odds">{{ '%+d'|format(p.american_equivalent) }}</span> combined odds
-          <span class="same-game-note" {% if not p.has_same_game_legs %}hidden{% endif %}>· same-game legs: hit chance is correlation-adjusted; your book will reprice the ticket in its SGP builder</span>
+          <span class="same-game-note" {% if not p.has_same_game_legs %}hidden{% endif %}>· same-game legs: hit chance is correlation-adjusted; the SGP builder will quote a lower payout than this product</span>
         </div>
         <ul>
           {% for leg in p.legs %}

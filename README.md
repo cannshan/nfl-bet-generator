@@ -103,10 +103,16 @@ against the real result once the game is played — see below.
   discounts a prop's edge when ranking which legs make a card, so two props
   with similar edge but different volatility don't get treated as equally
   good bets.
+- **One sportsbook, every book's opinion.** Every leg's line, price and
+  payout come from a single configured book (`BOOKMAKER_KEY`, default
+  DraftKings), so a ticket is something you can actually place in that app.
+  The fair-value reference behind each probability still uses the
+  consensus of every book in the feed — that's precisely what reveals when
+  your book's number is off the market.
 - **Edge**: model probability minus the **breakeven** probability at the
   price actually offered (1 / decimal odds) — i.e. expected value after the
-  book's vig. Most of the edge that survives market anchoring is line/price
-  shopping across books, which is the one edge a retail bettor reliably has.
+  book's vig. With one book, the edge that survives is where that book's
+  line or price sits favorably against the rest of the market.
   Each leg shows its chance to hit, its breakeven, and where the market
   consensus puts the stat vs. where the player's game log alone would.
 - **Live injury reports**: ESPN's public injuries endpoint (one call for the

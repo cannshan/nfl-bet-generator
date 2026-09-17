@@ -359,17 +359,22 @@ def _defensive_injury_bonus_by_team(player_index, injuries, current_rosters):
 def _collect_market(event_odds):
     """Two views of the same prop board:
 
-    best_prices: {(market, player, point, side): best price across books}
-      -- the price a leg is actually offered at (shop every book).
+    best_prices: {(market, player, point, side): price at the offer book}
+      -- the price a leg is actually offered at. Only the configured
+      sportsbook (config.BOOKMAKER_KEY, e.g. DraftKings) contributes here,
+      so every leg is one you can place in that app at that line.
     quotes: {(market, player): [(point, devigged_p_over), ...]}
-      -- one entry per book that posts BOTH sides at a point, devigged
-      within that single book. This is what the market consensus is built
-      from. Devigging the best Over from one book against the best Under
-      from another (what an earlier version did) mixes two books' opinions
-      and understates the vig, so it's never done here."""
+      -- one entry per book (ALL books) that posts BOTH sides at a point,
+      devigged within that single book. This is what the market consensus
+      is built from: the more books, the better the fair-value reference,
+      and that reference is exactly what reveals when the offer book's
+      price is off. Devigging the best Over from one book against the
+      best Under from another (what an earlier version did) mixes two
+      books' opinions and understates the vig, so it's never done here."""
     best = {}
     quotes = {}
     for bm in event_odds.get("bookmakers", []):
+        offer_book = odds_math.is_offer_book(bm)
         for market in bm.get("markets", []):
             mkey = market.get("key")
             if mkey not in MARKET_CONFIG:
@@ -383,7 +388,7 @@ def _collect_market(event_odds):
                     continue
                 dec = odds_math.american_to_decimal(outcome["price"])
                 key = (mkey, player, point, side)
-                if key not in best or dec > best[key]["decimal"]:
+                if offer_book and (key not in best or dec > best[key]["decimal"]):
                     best[key] = {"american": outcome["price"], "decimal": dec, "bookmaker": bm.get("title")}
                 per_point.setdefault((player, point), {})[side] = outcome["price"]
             for (player, point), sides in per_point.items():

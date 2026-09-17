@@ -143,10 +143,17 @@ def _build_model():
     }
 
 
+def _offer_books(bookmakers):
+    """Just the configured sportsbook's entry (see config.BOOKMAKER_KEY) --
+    the only place a leg's line and price may come from."""
+    return [bm for bm in bookmakers if odds_math.is_offer_book(bm)]
+
+
 def _best_price(bookmakers, market_key, outcome_name, point=None):
-    """Find the best (highest decimal) price for a given outcome across all books."""
+    """The offer book's price for a given outcome (the best across its
+    entries, which is normally just one)."""
     best = None
-    for bm in bookmakers:
+    for bm in _offer_books(bookmakers):
         for market in bm.get("markets", []):
             if market.get("key") != market_key:
                 continue
@@ -199,8 +206,8 @@ def _consensus_two_way(bookmakers, market_key, name_a, name_b, point_a=None, poi
 
 
 def _first_spread_points(bookmakers, home_name, away_name):
-    """Returns (home_point, away_point) from the first bookmaker that posts a spread."""
-    for bm in bookmakers:
+    """Returns (home_point, away_point) as posted by the offer book."""
+    for bm in _offer_books(bookmakers):
         for market in bm.get("markets", []):
             if market.get("key") != "spreads":
                 continue
@@ -213,7 +220,8 @@ def _first_spread_points(bookmakers, home_name, away_name):
 
 
 def _first_total_line(bookmakers):
-    for bm in bookmakers:
+    """The offer book's total line."""
+    for bm in _offer_books(bookmakers):
         for market in bm.get("markets", []):
             if market.get("key") != "totals":
                 continue

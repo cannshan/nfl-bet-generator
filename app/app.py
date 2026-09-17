@@ -1,6 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, render_template, request, jsonify, redirect, url_for
-from app.config import DEFAULT_STAKE, DEFAULT_TARGET_PAYOUT
+from app.config import DEFAULT_STAKE, DEFAULT_TARGET_PAYOUT, BOOKMAKER_KEY
 from app import value_finder, odds_client, game_cards, parlay_builder, expert_insight, injury_client, tracking, cache_utils
 
 # static_folder points at the repo-root public/ directory (Vercel's
@@ -196,7 +196,21 @@ def dashboard():
         focus_game=focus_game,
         available_games=available_games,
         odds_api_quota=odds_api_quota,
+        offer_book=_offer_book_title(best_odds_parlays),
     )
+
+
+def _offer_book_title(parlays):
+    """Display name of the configured offer book, taken from a leg actually
+    shown (the feed's own title, e.g. "DraftKings") so the heading and the
+    legs agree; None when every book is in play."""
+    if not BOOKMAKER_KEY:
+        return None
+    for parlay in parlays:
+        for leg in parlay["legs"]:
+            if leg.get("bookmaker"):
+                return leg["bookmaker"]
+    return BOOKMAKER_KEY.capitalize()
 
 
 @app.route("/refresh-bets")
