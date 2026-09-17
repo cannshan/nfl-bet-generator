@@ -19,6 +19,19 @@ from app import formatting, expert_insight
 # 3-point sentiment nudge would have been the LARGEST single component of
 # most edges -- for an unvalidated, LLM-summarized signal. Scaled to match.
 SENTIMENT_PROB_NUDGE = {"bullish": 0.01, "bearish": -0.01}
+# The nudge above is for a read of credibility 1.0 x this multiplier: a
+# high-confidence injury/role read from several sources moves a leg by up
+# to 3 points; a vague "big game last week" read by well under 1. See
+# expert_insight.credibility() for the grading.
+MAX_CREDIBLE_NUDGE_MULTIPLIER = 3.0
+# Ranking priority: legs that AGREE with credible research get this much
+# added to their pool-ranking score (edge units) times credibility, so a
+# well-sourced read decides which legs make the ticket even when the
+# price alone wouldn't. A leg that contradicts ANY bullish/bearish read is
+# left out of the pool regardless of the read's weight: showing a bullish
+# note under an Under is incoherent advice even when the note is weak,
+# and the user reads the note, not the weight.
+RESEARCH_PRIORITY = 0.04
 
 
 def _apply_expert_insight(matchup, props, kickoff_et):
@@ -41,18 +54,27 @@ def _apply_expert_insight(matchup, props, kickoff_et):
             continue
         leg["expert_note"] = info.get("note")
         leg["expert_sentiment"] = info.get("sentiment")
+        leg["expert_basis"] = info.get("basis")
+        leg["expert_confidence"] = info.get("confidence")
+        leg["expert_sources"] = info.get("sources") or []
+        cred = expert_insight.credibility(info)
+        leg["expert_credibility"] = cred
         nudge = SENTIMENT_PROB_NUDGE.get(info.get("sentiment"))
         if nudge is None:
+            leg["research_priority"] = 0.0
+            leg["contradicts_expert"] = False
             continue
         direction = 1 if leg["side"] == "Over" else -1
-        new_prob = max(0.01, min(0.99, leg["model_prob"] + nudge * direction))
+        agrees = nudge * direction > 0
+        new_prob = max(0.01, min(0.99, leg["model_prob"] + nudge * direction * MAX_CREDIBLE_NUDGE_MULTIPLIER * cred))
         leg["model_prob"] = round(new_prob, 4)
         leg["edge"] = round(new_prob - leg["breakeven_prob"], 4)
+        leg["research_priority"] = round(RESEARCH_PRIORITY * cred * (1 if agrees else -1), 4)
         # A leg that bets AGAINST the research it displays (an Under under a
-        # bullish note) is incoherent advice, whatever the numbers say: the
-        # nudge alone is too small to keep the search from picking it. Mark
-        # it so the parlay pool can leave it out.
-        leg["contradicts_expert"] = nudge * direction < 0
+        # bullish note) is incoherent advice whatever the price says -- keep
+        # it out of the pool. Credibility scales how much an AGREEING read
+        # helps, never whether a contradicting one is allowed.
+        leg["contradicts_expert"] = not agrees
 
 
 def _prefetch_expert_insight(by_game):

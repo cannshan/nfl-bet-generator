@@ -167,9 +167,16 @@ against the real result once the game is played — see below.
   is set, one Claude API call per prop-rich game (not per player) uses Claude's
   web search tool to find current betting-expert commentary, projections, and
   buzz on every candidate player in that game — before the card is finalized,
-  not after. A bullish/bearish read nudges that leg's probability by a small,
-  fixed amount (±1pp), which can genuinely change which legs make the card,
-  not just decorate whatever the stats model already picked. This is the one
+  not after. The search is asked to grade its own read — what it rests on
+  (injury/role news from a team source or beat reporter, a published
+  projection, matchup analysis, or a recent-game narrative the market has
+  long since priced), how confident it is, and which outlets it came from —
+  and that grade becomes a credibility weight shown on the card. A credible
+  read moves the leg's probability by up to 3 points and gets priority in
+  choosing which legs make the ticket; a narrative read barely moves
+  anything. A leg is never recommended against a credible read on the same
+  player (an Under beneath a bullish note), and a weakly-sourced
+  contradicting read costs the leg ranking priority instead. This is the one
   part of the app with a real per-use cost (roughly a few cents per game per
   refresh, cached for 4 hours) — uncheck "Include expert insight" to skip it,
   or just don't set the API key. Token usage is printed to the terminal

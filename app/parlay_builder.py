@@ -134,7 +134,7 @@ def dedupe_best_per_bet(pool):
     best = {}
     for leg in pool:
         key = (leg["matchup"], leg["player"]) if leg.get("player") else (leg["matchup"], leg["market"])
-        if key not in best or leg["edge"] > best[key]["edge"]:
+        if key not in best or rank_score(leg) > rank_score(best[key]):
             best[key] = leg
     return list(best.values())
 
@@ -191,6 +191,14 @@ def pick_diverse(combos, num_results, max_shared_fraction=MAX_SHARED_LEG_FRACTIO
         allowance += 1
 
 
+def rank_score(leg):
+    """How strongly a leg deserves a place in the candidate pool: its edge
+    (EV after vig), discounted for how erratic its stat category is, plus
+    the priority credible research gives a leg it agrees with (or takes
+    from one it disagrees with) -- see game_cards.RESEARCH_PRIORITY."""
+    return leg["edge"] - 0.05 * leg.get("category_cv", 0.5) + leg.get("research_priority", 0.0)
+
+
 def find_best_odds_parlays(pool, stake, target_payout, num_results=3, pool_size=CROSS_GAME_CANDIDATE_POOL_SIZE):
     """The 'statistically best bets' parlay: no restriction on which games a
     leg can come from -- purely chases the highest achievable hit probability
@@ -202,7 +210,7 @@ def find_best_odds_parlays(pool, stake, target_payout, num_results=3, pool_size=
     its own Same Game Parlay builder rather than honor the naive product of
     the individual prices."""
     legs = _drop_redundant_favorite_bets(dedupe_best_per_bet(pool))
-    legs = sorted(legs, key=lambda l: l["edge"] - 0.05 * l.get("category_cv", 0.5), reverse=True)[:pool_size]
+    legs = sorted(legs, key=rank_score, reverse=True)[:pool_size]
     matches = search_near_target(legs, stake, target_payout)
     return [build_result(combo, stake) for combo in pick_diverse(matches, num_results)]
 

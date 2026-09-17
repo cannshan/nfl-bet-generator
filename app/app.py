@@ -353,8 +353,7 @@ def redo_leg():
             [l for l in game_legs if l.get("player")],
         ]
 
-    def score(leg):
-        return leg["edge"] - 0.05 * leg.get("category_cv", 0.5)
+    score = parlay_builder.rank_score
 
     candidate = None
     for group in search_order:
