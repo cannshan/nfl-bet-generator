@@ -36,16 +36,15 @@ def _offensive_injuries():
     return injuries
 
 
-def _record_suggestions(cards, best_odds_parlays, season, week):
+def _record_suggestions(best_odds_parlays, season, week):
     """Logs every leg actually shown to the user -- the real suggestions,
     not the full candidate pool -- so the track record reflects what this
     app told you before any outcome was known. Best-effort: a logging
     failure should never break the page. One log_suggestions call per
-    card/parlay is independent of every other, so they run concurrently
-    rather than one at a time (this used to be a real chunk of page load
-    time with a full slate of games)."""
-    calls = [(card["legs"], "same_game_parlay") for card in cards]
-    calls += [(parlay["legs"], "best_odds_parlay") for parlay in best_odds_parlays]
+    parlay is independent of every other, so they run concurrently rather
+    than one at a time (this used to be a real chunk of page load time with
+    a full slate of games)."""
+    calls = [(parlay["legs"], "best_odds_parlay") for parlay in best_odds_parlays]
     if not calls:
         return
 
@@ -103,14 +102,14 @@ def _available_games():
 
 def _run_bets_pipeline(stake, target, include_props, include_insight, event_filter=None):
     """The live-data pipeline: settle old predictions, pull odds/model data,
-    build cards/parlays, log new suggestions, capture closing lines. Every
-    external fetch inside this call chain checks cache_utils.live_fetch_allowed()
-    before ever touching a network -- so this is safe to call from a plain
-    page view (cache_utils mode 'passive': nothing live happens, whatever's
-    cached gets reused regardless of age) as well as from an explicit
-    refresh action (mode 'active': stale/missing cache entries actually
-    refetch). Callers are responsible for setting the mode first.
-    `event_filter`: see player_props.get_player_prop_candidates.
+    build the best-odds parlay pool, log new suggestions, capture closing
+    lines. Every external fetch inside this call chain checks
+    cache_utils.live_fetch_allowed() before ever touching a network -- so
+    this is safe to call from a plain page view (cache_utils mode 'passive':
+    nothing live happens, whatever's cached gets reused regardless of age)
+    as well as from an explicit refresh action (mode 'active': stale/missing
+    cache entries actually refetch). Callers are responsible for setting the
+    mode first. `event_filter`: see player_props.get_player_prop_candidates.
 
     The tracking writes below (settling old predictions, logging new
     suggestions, capturing closing lines) only matter when the pool actually
@@ -120,7 +119,7 @@ def _run_bets_pipeline(stake, target, include_props, include_insight, event_filt
     redundant round trips on a single passive page load). Gated on the same
     active/passive mode as the live fetches for that reason."""
     error = None
-    pool, meta, cards, best_odds_parlays = [], {}, [], []
+    pool, meta, best_odds_parlays = [], {}, []
     if cache_utils.live_fetch_allowed():
         try:
             tracking.settle_pending()
@@ -133,10 +132,13 @@ def _run_bets_pipeline(stake, target, include_props, include_insight, event_filt
         if meta.get("error"):
             error = meta["error"]
         elif pool:
-            cards = game_cards.build_game_cards(pool, stake, target, include_insight=include_insight)
+            # Expert research still nudges prop probabilities in place (same
+            # signal that used to only matter for Same Game Parlay
+            # selection) so Statistically Best Bets benefits from it too.
+            game_cards.apply_expert_insight(pool, include_insight=include_insight)
             best_odds_parlays = parlay_builder.find_best_odds_parlays(pool, stake, target)
             if cache_utils.live_fetch_allowed():
-                _record_suggestions(cards, best_odds_parlays, meta.get("season"), meta.get("week"))
+                _record_suggestions(best_odds_parlays, meta.get("season"), meta.get("week"))
                 try:
                     tracking.capture_closing_lines(pool)
                 except Exception:
@@ -145,7 +147,7 @@ def _run_bets_pipeline(stake, target, include_props, include_insight, event_filt
         error = str(e)
     except Exception as e:  # surface any other failure plainly rather than a blank page
         error = f"Something went wrong pulling live data: {e}"
-    return error, cards, best_odds_parlays, meta
+    return error, best_odds_parlays, meta
 
 
 @app.route("/")
@@ -157,7 +159,7 @@ def dashboard():
     stake, target, include_props, include_insight, focus_game = _dashboard_params()
     cache_utils.set_mode("passive")
 
-    error, cards, best_odds_parlays, meta = _run_bets_pipeline(
+    error, best_odds_parlays, meta = _run_bets_pipeline(
         stake, target, include_props, include_insight, _parse_event_filter(focus_game),
     )
     available_games = _available_games()
@@ -174,7 +176,6 @@ def dashboard():
         "index.html",
         error=error,
         never_refreshed=never_refreshed,
-        game_cards=cards,
         best_odds_parlays=best_odds_parlays,
         meta=meta,
         stake=stake,

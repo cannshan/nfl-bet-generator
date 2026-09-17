@@ -131,47 +131,6 @@
     </div>
   {% endif %}
 
-  {% set prop_cards = game_cards|selectattr('has_props')|list %}
-  {% set fallback_cards = game_cards|rejectattr('has_props')|list %}
-
-  {% if prop_cards %}
-  <section>
-    <h2>Same Game Parlays</h2>
-    <p class="meta">
-      One combo per game of the week that has player props live, built mostly from that game's
-      props, searched for the payout closest to your target with the best achievable hit chance.
-    </p>
-    <div class="parlay-grid">
-      {% for card in prop_cards %}
-      <div class="parlay-card" data-stake="{{ stake }}">
-        <div class="card-header">
-          <div class="card-title-wrap">
-            <h3 class="card-title">{{ card.matchup }}</h3>
-            {% if card.kickoff_et %}<div class="kickoff">{{ card.kickoff_et }}</div>{% endif %}
-            {% if card.odds_age_display %}<div class="odds-age" title="How long ago these odds were fetched">Odds as of {{ card.odds_age_display }}</div>{% endif %}
-          </div>
-          <div class="payout-badge">
-            <span class="payout">$<span class="payout-value">{{ card.payout }}</span></span>
-            <span class="prob"><span class="prob-value">{{ (card.combined_prob * 100)|round(2) }}</span>% if independent</span>
-          </div>
-        </div>
-        <div class="odds-line">
-          <span class="leg-count">{{ card.num_legs }}</span> legs · <span class="combined-odds">{{ '%+d'|format(card.american_equivalent) }}</span> combined odds
-          {% if not card.hit_target %}· closest available, below target{% endif %}
-        </div>
-        <ul>
-          {% for leg in card.legs %}
-            {{ legs.render_leg(leg) }}
-          {% endfor %}
-        </ul>
-      </div>
-      {% endfor %}
-    </div>
-  </section>
-  {% elif not error %}
-    <p class="meta">No Same Game Parlays yet — no game has player props live. Check back closer to kickoff as sportsbooks post them.</p>
-  {% endif %}
-
   {% if best_odds_parlays %}
   <section>
     <h2>Statistically Best Bets (${{ stake }} → ~${{ target|round(0) }})</h2>
@@ -203,31 +162,8 @@
   </section>
   {% endif %}
 
-  {% if fallback_cards %}
-  <section>
-    <h2>Other games — props not posted yet</h2>
-    <p class="meta">
-      These games don't have player props live yet, so there aren't enough legs to approach your
-      target payout — shown here for reference as a smaller spread/total combo instead.
-    </p>
-    <table>
-      <thead>
-        <tr><th>Matchup</th><th>Kickoff (ET)</th><th>Combo</th><th>Odds</th><th>Payout</th><th>If independent</th></tr>
-      </thead>
-      <tbody>
-        {% for card in fallback_cards %}
-        <tr>
-          <td>{{ card.matchup }}</td>
-          <td>{{ card.kickoff_et or '—' }}</td>
-          <td>{% for leg in card.legs %}{{ leg.market }}: {{ leg.selection }}{% if not loop.last %} + {% endif %}{% endfor %}</td>
-          <td>{{ '%+d'|format(card.american_equivalent) }}</td>
-          <td>${{ card.payout }}</td>
-          <td>{{ (card.combined_prob * 100)|round(1) }}%</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </section>
+  {% if not best_odds_parlays and not error %}
+    <p class="meta">No bets available yet — click Refresh Bets above to pull today's odds.</p>
   {% endif %}
 
   <footer>

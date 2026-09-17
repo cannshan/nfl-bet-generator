@@ -1,7 +1,10 @@
 """Reusable combo-search core: given a pool of candidate legs, search
 combinations for a payout near a target, ranked by the highest combined
-hit probability achievable at that payout level (searches a tight band
-around the target first, widening only if nothing is found there).
+hit probability achievable at that payout level. Starts with a tight band
+around the target and widens it, but only actually prefers a wider band's
+combo when it's a meaningfully better bet (see PROB_IMPROVEMENT_FACTOR) --
+hitting the exact target payout is never allowed to force a near-zero-
+probability combo when a somewhat-lower-payout, much-more-likely one exists.
 
 This is deliberately leg-pool-agnostic -- see game_cards.py, which calls it
 per matchup with that game's own legs (mostly player props). Multiplying
@@ -15,6 +18,16 @@ from app import odds_math, formatting
 
 MAX_LEGS_SEARCHED = 8
 CROSS_GAME_CANDIDATE_POOL_SIZE = 14
+# A wider-tolerance combo only replaces a tighter-tolerance one if it's at
+# least this many times more likely to hit. Reaching an ambitious target
+# (e.g. 200x on a $5 stake) can force 7-8 legs, which multiplies down to a
+# ~1-2% combined probability even when each leg is individually solid --
+# that combo would otherwise "win" the tightest-tolerance band every time
+# despite being a much worse bet than a smaller combo paying somewhat less.
+# This is a genuine trade-off, not a bug: a lower target payout will always
+# get you higher win-probability combos, since parlay math doesn't allow both
+# a huge payout and a high hit rate off realistic odds.
+PROB_IMPROVEMENT_FACTOR = 1.5
 
 
 def combo_stats(combo, stake):
@@ -42,20 +55,37 @@ def _build_result(combo, stake):
 def search_near_target(legs, stake, target_payout, max_legs=MAX_LEGS_SEARCHED,
                         tolerances=(0.15, 0.3, 0.5, 0.75, 0.95)):
     """Returns matches (payout within tolerance of target) sorted by highest
-    combined probability, using the tightest tolerance band that finds any."""
+    combined probability. Walks tolerance bands tightest to widest, but only
+    adopts a wider band's best combo when it's meaningfully more likely to
+    hit (see PROB_IMPROVEMENT_FACTOR) -- so a lower-payout combo with a real
+    shot at winning beats a target-hitting one that's basically a lottery
+    ticket. Combo stats are computed once against the widest band, then just
+    filtered per tolerance level rather than recomputed each time."""
+    widest = tolerances[-1]
+    low_widest = target_payout * (1 - widest)
+    high_widest = target_payout * (1 + widest)
+    all_combos = []
+    for size in range(2, min(max_legs, len(legs)) + 1):
+        for combo in itertools.combinations(legs, size):
+            dec_odds, payout, combined_prob = combo_stats(combo, stake)
+            if low_widest <= payout <= high_widest:
+                all_combos.append((payout, combined_prob, combo))
+
+    best_matches, best_prob = None, -1.0
     for tol in tolerances:
         low = target_payout * (1 - tol)
         high = target_payout * (1 + tol)
-        matches = []
-        for size in range(2, min(max_legs, len(legs)) + 1):
-            for combo in itertools.combinations(legs, size):
-                dec_odds, payout, combined_prob = combo_stats(combo, stake)
-                if low <= payout <= high:
-                    matches.append(_build_result(combo, stake))
-        if matches:
-            matches.sort(key=lambda m: m["combined_prob"], reverse=True)
-            return matches
-    return []
+        matches = [c for c in all_combos if low <= c[0] <= high]
+        if not matches:
+            continue
+        matches.sort(key=lambda c: c[1], reverse=True)
+        top_prob = matches[0][1]
+        if best_matches is None or top_prob >= best_prob * PROB_IMPROVEMENT_FACTOR:
+            best_matches, best_prob = matches, top_prob
+
+    if best_matches is None:
+        return []
+    return [_build_result(combo, stake) for _payout, _prob, combo in best_matches]
 
 
 def dedupe_best_per_bet(pool):
