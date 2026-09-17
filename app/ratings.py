@@ -53,6 +53,52 @@ WIN_PROB_CALIBRATION = [
 # it claimed, the worse it did).
 WIN_PROB_CEILING = WIN_PROB_CALIBRATION[-1][1]
 
+# Player-prop recalibration, same isotonic-regression methodology as
+# WIN_PROB_CALIBRATION above, fit against real historical player-game
+# outcomes (2018-2025, walk-forward, no lookahead, matchup + role-trend
+# adjustments applied) rather than assumed. Four tables, not two: a first
+# pass pooling all usage levels together found RAW_NORMAL (passing/rushing
+# yards, attempts, completions) mildly underconfident near the middle but
+# overconfident in the tail, and LOG_SCALE (receiving yards/receptions)
+# running the opposite way -- but a follow-up split by usage level (this is
+# what a real leg shown in production surfaced: "Sione Vaki Under 7.5 Rush
+# Yds" displayed 97.1% raw confidence) found LOW-usage players (thin,
+# erratic recent-game samples -- backup RBs, depth targets) are
+# meaningfully MORE overconfident in the tail than stable, every-down
+# players once you separate them: at the same raw 97.7%, low-usage players'
+# real historical accuracy was ~93.0% vs ~95.7% for high-usage ones. Pooling
+# them under-corrected the exact case that prompted this fix. Each table
+# lists (raw favored-side probability, calibrated favored-side probability);
+# the usage split point is USAGE_SPLIT_MEAN in player_props.py.
+PROP_CALIBRATION_RAW_LOW_USAGE = [
+    (0.5000, 0.5000), (0.5793, 0.6222), (0.6554, 0.6743), (0.7257, 0.7291),
+    (0.7881, 0.7720), (0.8413, 0.8131), (0.8849, 0.8468), (0.9192, 0.8769),
+    (0.9452, 0.8983), (0.9641, 0.9165), (0.9772, 0.9304), (0.9861, 0.9426),
+    (0.9918, 0.9518), (0.9953, 0.9596), (0.9974, 0.9664), (0.9987, 0.9702),
+    (1.0000, 0.9702),
+]
+PROP_CALIBRATION_RAW_HIGH_USAGE = [
+    (0.5000, 0.5000), (0.5793, 0.6317), (0.6554, 0.6954), (0.7257, 0.7539),
+    (0.7881, 0.8030), (0.8413, 0.8443), (0.8849, 0.8777), (0.9192, 0.9046),
+    (0.9452, 0.9290), (0.9641, 0.9438), (0.9772, 0.9568), (0.9861, 0.9681),
+    (0.9918, 0.9763), (0.9953, 0.9806), (0.9974, 0.9853), (0.9987, 0.9886),
+    (1.0000, 0.9886),
+]
+PROP_CALIBRATION_LOG_LOW_USAGE = [
+    (0.5000, 0.5000), (0.5793, 0.5296), (0.6554, 0.6099), (0.7257, 0.6922),
+    (0.7881, 0.7704), (0.8413, 0.8403), (0.8849, 0.8956), (0.9192, 0.9351),
+    (0.9452, 0.9609), (0.9641, 0.9758), (0.9772, 0.9852), (0.9861, 0.9914),
+    (0.9918, 0.9947), (0.9953, 0.9967), (0.9974, 0.9980), (0.9987, 0.9986),
+    (1.0000, 0.9986),
+]
+PROP_CALIBRATION_LOG_HIGH_USAGE = [
+    (0.5000, 0.5000), (0.5793, 0.5590), (0.6554, 0.6519), (0.7257, 0.7447),
+    (0.7881, 0.8242), (0.8413, 0.8916), (0.8849, 0.9367), (0.9192, 0.9635),
+    (0.9452, 0.9791), (0.9641, 0.9882), (0.9772, 0.9937), (0.9861, 0.9960),
+    (0.9918, 0.9980), (0.9953, 0.9989), (0.9974, 0.9993), (0.9987, 0.9994),
+    (1.0000, 0.9994),
+]
+
 
 def _interp(x, breakpoints):
     for (x0, y0), (x1, y1) in zip(breakpoints, breakpoints[1:]):
@@ -62,6 +108,16 @@ def _interp(x, breakpoints):
             t = (x - x0) / (x1 - x0)
             return y0 + t * (y1 - y0)
     return breakpoints[-1][1]
+
+
+def calibrate_prop_prob(raw_p, calibration_table):
+    """Same idea as _calibrate_win_prob below, generalized to any
+    (raw, calibrated) breakpoint table: recalibrates the FAVORED side (max
+    of p, 1-p) and mirrors it back for the other side, since the
+    calibration curve is fit on favored-side accuracy."""
+    favored = max(raw_p, 1 - raw_p)
+    calibrated_favored = _interp(favored, calibration_table)
+    return calibrated_favored if raw_p >= 0.5 else 1 - calibrated_favored
 
 
 def _calibrate_win_prob(raw_p):

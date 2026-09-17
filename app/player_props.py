@@ -61,6 +61,14 @@ def _extract_keyword_sentence(text, keywords):
 
 
 MIN_GAMES_WEIGHT = 3.0
+# Median-ish usage split per field, used to pick which calibration table
+# (ratings.PROP_CALIBRATION_*_LOW/HIGH_USAGE) applies -- see the comment
+# above those tables for why low- and high-usage players need separate
+# curves rather than one pooled one.
+USAGE_SPLIT_MEAN = {
+    "passing_yards": 220, "attempts": 30, "completions": 19, "rushing_yards": 25,
+    "receiving_yards": 35, "receptions": 3.0,
+}
 MATCHUP_ADJUSTMENT_CLAMP = (0.75, 1.25)
 ROLE_TREND_CLAMP = (0.8, 1.3)
 RECENT_GAMES_FOR_TREND = 3
@@ -467,6 +475,8 @@ def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None, event_f
             log_mean, log_std = (
                 _weighted_mean_std_log(rows, field) if field in RECEIVING_FIELDS else (None, None)
             )
+            usage_split = USAGE_SPLIT_MEAN.get(field)
+            is_low_usage = usage_split is not None and base_mean < usage_split
             if log_mean is not None and log_std:
                 # Translate the combined multiplicative adjustment (matchup,
                 # role trend, QB-out, defensive injuries, weather) into an
@@ -477,8 +487,18 @@ def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None, event_f
                 total_factor = max(adjusted_mean / base_mean, 0.01) if base_mean > 0 else 1.0
                 adjusted_log_mean = log_mean + math.log(total_factor)
                 p_under = ratings.normal_cdf((math.log(point + 1) - adjusted_log_mean) / log_std)
+                log_table = ratings.PROP_CALIBRATION_LOG_LOW_USAGE if is_low_usage else ratings.PROP_CALIBRATION_LOG_HIGH_USAGE
+                p_under = ratings.calibrate_prop_prob(p_under, log_table)
             else:
                 p_under = ratings.normal_cdf((point - adjusted_mean) / std)
+                # Only fields actually included in the calibration backtest
+                # (USAGE_SPLIT_MEAN) get corrected -- passing_tds wasn't
+                # tested (too low/discrete a distribution for the same
+                # normal-approximation backtest) and stays uncalibrated
+                # rather than forced through a curve fit on different data.
+                if usage_split is not None:
+                    raw_table = ratings.PROP_CALIBRATION_RAW_LOW_USAGE if is_low_usage else ratings.PROP_CALIBRATION_RAW_HIGH_USAGE
+                    p_under = ratings.calibrate_prop_prob(p_under, raw_table)
             p_over = 1 - p_under
 
             over_price, under_price = sides.get("Over"), sides.get("Under")
