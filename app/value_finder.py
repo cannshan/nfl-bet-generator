@@ -207,6 +207,28 @@ def analyze_games(odds_data, model):
             book_away_p = odds_math.american_to_implied_prob(away_price["american"])
             fair_home_p, fair_away_p = odds_math.devig_two_way(book_home_p, book_away_p)
 
+            # BUG FIX (found in a full model audit, backtested against 5,250
+            # real (game, side) moneyline observations, 2016-2025): when the
+            # market's own fair probability for a side is already above our
+            # calibration ceiling (WIN_PROB_CEILING, ~75.3%), our capped
+            # model_prob is MECHANICALLY forced below it -- not because the
+            # model independently disagrees, but because it structurally
+            # can't express more confidence than the ceiling. That created a
+            # systematic "fade the real favorite / back the real underdog"
+            # signal with no genuine insight behind it. Backtested result:
+            # real favorites priced above the ceiling won at roughly their
+            # market rate (67.9% actual vs 65.7% book-implied) -- the
+            # market's confidence there was justified. Betting the resulting
+            # "edge" was a LOSING strategy (the more edge it claimed, the
+            # worse it did: -42% ROI in the highest-edge bucket). Deferring
+            # to the market's own price whenever it's outside our validated
+            # range -- same principle as the Totals fix -- removes this
+            # mechanical false edge without needing to touch the ceiling
+            # itself (which IS correctly calibrated for probabilities the
+            # model can actually differentiate).
+            if fair_home_p > ratings.WIN_PROB_CEILING or fair_away_p > ratings.WIN_PROB_CEILING:
+                home_win_prob, away_win_prob = fair_home_p, fair_away_p
+
             candidates.append(_make_leg(
                 matchup, commence, "Moneyline", home_name, home_price,
                 home_win_prob, fair_home_p,

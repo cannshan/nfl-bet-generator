@@ -40,6 +40,18 @@ WIN_PROB_CALIBRATION = [
     (0.939, 0.753),
     (1.000, 0.753),
 ]
+# The calibrated ceiling above -- exposed so callers comparing this
+# probability against a REAL market price (i.e. computing "edge") know where
+# our own validated confidence stops. See WIN_PROB_CEILING's docstring-style
+# note in value_finder.py for why this matters: the market routinely prices
+# real favorites above this ceiling, and backtesting against real historical
+# moneylines (2016-2025) showed those favorites win at roughly their market
+# rate -- the market's higher confidence there is usually justified, not
+# overconfident. Treating "our capped probability is lower than the market's"
+# as a real edge on the underdog was a purely mechanical artifact of the cap,
+# not genuine insight, and back-tested as a LOSING signal (the more "edge"
+# it claimed, the worse it did).
+WIN_PROB_CEILING = WIN_PROB_CALIBRATION[-1][1]
 
 
 def _interp(x, breakpoints):
