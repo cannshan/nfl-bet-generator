@@ -4,7 +4,8 @@ book's price implies (an "edge"), plus a broader candidate pool for parlay
 construction.
 """
 from concurrent.futures import ThreadPoolExecutor
-from statistics import median
+from statistics import NormalDist, median
+from app.config import SHARP_BOOK_KEY, SHARP_BOOK_WEIGHT
 from app import espn_client, ratings, odds_math, nflverse_client, injury_client, roster_client, odds_client
 from app.team_names import build_lookup, match
 
@@ -173,16 +174,56 @@ def _best_price(bookmakers, market_key, outcome_name, point=None):
     return best
 
 
-def _consensus_two_way(bookmakers, market_key, name_a, name_b, point_a=None, point_b=None):
-    """Market consensus (fair_a, fair_b) for a two-way market: each book's
-    own pair of prices is devigged WITHIN that book, and the median across
-    books is the consensus. Devigging the best price for side A (from one
-    book) against the best price for side B (from another) -- what an
-    earlier version did -- mixes two books' opinions and understates the
-    vig, so both sides come out a little too likely. Books that only post
-    one side, or a different point, are skipped."""
+_NORMAL = NormalDist()
+
+
+def _sharp_fair(bookmakers, market_key, name_a, name_b, point_a, threshold_sign, sigma):
+    """The sharp book's devigged P(side a), translated to the offer book's
+    point when the two books post different numbers. A side wins when the
+    underlying margin/total X exceeds a threshold t (t = -point for a
+    spread side, t = +point for a total's Over, -point for its Under);
+    the sharp book's P(X > t_sharp) becomes P(X > t_offer) via the normal
+    margin model: Phi(z + (t_sharp - t_offer) / sigma). Returns None when
+    the sharp book has no price for this market."""
+    for bm in bookmakers:
+        if (bm.get("key") or "").lower() != SHARP_BOOK_KEY:
+            continue
+        for market in bm.get("markets", []):
+            if market.get("key") != market_key:
+                continue
+            outs = {o.get("name"): o for o in market.get("outcomes", [])}
+            if name_a not in outs or name_b not in outs:
+                continue
+            fair_a, _fair_b = odds_math.devig_two_way(
+                odds_math.american_to_implied_prob(outs[name_a]["price"]),
+                odds_math.american_to_implied_prob(outs[name_b]["price"]),
+            )
+            sharp_point = outs[name_a].get("point")
+            if threshold_sign and point_a is not None and sharp_point is not None and sharp_point != point_a:
+                t_sharp, t_offer = threshold_sign * sharp_point, threshold_sign * point_a
+                z = _NORMAL.inv_cdf(min(max(fair_a, 0.01), 0.99))
+                fair_a = _NORMAL.cdf(z + (t_sharp - t_offer) / sigma)
+            return fair_a
+    return None
+
+
+def _consensus_two_way(bookmakers, market_key, name_a, name_b, point_a=None, point_b=None,
+                       threshold_sign=None, sigma=ratings.MARGIN_SIGMA):
+    """Fair (fair_a, fair_b) for a two-way market at the offer book's
+    point: each book's own pair of prices is devigged WITHIN that book, the
+    median across books is the consensus -- and when the sharp book
+    (config.SHARP_BOOK_KEY) has a price, the answer is SHARP_BOOK_WEIGHT
+    on its number (translated to this point, see _sharp_fair) and the rest
+    on that consensus. Devigging the best price for side A (from one book)
+    against the best price for side B (from another) -- what an earlier
+    version did -- mixes two books' opinions and understates the vig, so
+    both sides come out a little too likely. Books that only post one
+    side, or a different point, don't enter the consensus."""
+    sharp = _sharp_fair(bookmakers, market_key, name_a, name_b, point_a, threshold_sign, sigma)
     fair_as = []
     for bm in bookmakers:
+        if (bm.get("key") or "").lower() == SHARP_BOOK_KEY:
+            continue
         for market in bm.get("markets", []):
             if market.get("key") != market_key:
                 continue
@@ -199,9 +240,14 @@ def _consensus_two_way(bookmakers, market_key, name_a, name_b, point_a=None, poi
                     odds_math.american_to_implied_prob(prices["b"]),
                 )
                 fair_as.append(fair_a)
-    if not fair_as:
+    if not fair_as and sharp is None:
         return None, None
-    fair_a = median(fair_as)
+    if sharp is None:
+        fair_a = median(fair_as)
+    elif not fair_as:
+        fair_a = sharp
+    else:
+        fair_a = SHARP_BOOK_WEIGHT * sharp + (1 - SHARP_BOOK_WEIGHT) * median(fair_as)
     return fair_a, 1 - fair_a
 
 
@@ -310,6 +356,7 @@ def analyze_games(odds_data, model):
             away_price_s = _best_price(bookmakers, "spreads", away_name, away_point)
             fair_home_p, fair_away_p = _consensus_two_way(
                 bookmakers, "spreads", home_name, away_name, home_point, away_point,
+                threshold_sign=-1, sigma=ratings.MARGIN_SIGMA,
             )
             if home_price_s and away_price_s and fair_home_p is not None:
                 home_label = f"{home_name} {home_point:+g}"
@@ -336,7 +383,10 @@ def analyze_games(odds_data, model):
         if total_line is not None:
             over_price = _best_price(bookmakers, "totals", "Over", total_line)
             under_price = _best_price(bookmakers, "totals", "Under", total_line)
-            fair_over_p, fair_under_p = _consensus_two_way(bookmakers, "totals", "Over", "Under", total_line, total_line)
+            fair_over_p, fair_under_p = _consensus_two_way(
+                bookmakers, "totals", "Over", "Under", total_line, total_line,
+                threshold_sign=+1, sigma=ratings.TOTAL_SIGMA,
+            )
             if over_price and under_price and fair_over_p is not None:
                 candidates.append(_make_leg(matchup, commence, "Total", f"Over {total_line}", over_price, fair_over_p, fair_over_p, side="Over"))
                 candidates.append(_make_leg(matchup, commence, "Total", f"Under {total_line}", under_price, fair_under_p, fair_under_p, side="Under"))

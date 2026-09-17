@@ -103,6 +103,15 @@ against the real result once the game is played — see below.
   discounts a prop's edge when ranking which legs make a card, so two props
   with similar edge but different volatility don't get treated as equally
   good bets.
+- **A sharp-book anchor for game lines.** Game odds are pulled from the US
+  and EU regions so Pinnacle — the book that takes the biggest, sharpest
+  action and is the professional benchmark for "true" odds — is in the feed.
+  For spreads, totals and moneylines the fair-value reference is 70%
+  Pinnacle's devigged number (translated to the offer book's line via the
+  normal margin model when the two books post different numbers) and 30%
+  the consensus of every other book. Vig is stripped with the power method
+  rather than proportional scaling, which correctly loads more of the vig
+  onto the longshot side.
 - **One sportsbook, every book's opinion.** Every leg's line, price and
   payout come from a single configured book (`BOOKMAKER_KEY`, default
   DraftKings), so a ticket is something you can actually place in that app.

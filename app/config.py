@@ -29,6 +29,19 @@ SPORTSGAMEODDS_API_KEY = os.environ.get("SPORTSGAMEODDS_API_KEY", "")
 # to shop every book instead.
 BOOKMAKER_KEY = os.environ.get("BOOKMAKER_KEY", "draftkings").strip().lower()
 
+# Regions of The Odds API to pull GAME odds from. "us" is the offer book's
+# home; "eu" adds Pinnacle (see SHARP_BOOK_KEY). Cost is markets x regions
+# credits per refresh (3 markets x 2 regions = 6), trivial on a 20k plan.
+ODDS_REGIONS = os.environ.get("ODDS_REGIONS", "us,eu")
+# The sharp reference book. Pinnacle takes the biggest bets and the
+# sharpest money and moves its lines to match, so its devigged price is
+# the closest thing to the market's "true" probability available. When it
+# has a price for a game-level market, the fair-value reference is
+# SHARP_BOOK_WEIGHT on Pinnacle and the rest on the consensus of every
+# other book. (Player props stay consensus-only: Pinnacle posts few.)
+SHARP_BOOK_KEY = os.environ.get("SHARP_BOOK_KEY", "pinnacle").strip().lower()
+SHARP_BOOK_WEIGHT = 0.7
+
 ODDS_CACHE_TTL_SECONDS = 10 * 60
 RATINGS_CACHE_TTL_SECONDS = 6 * 60 * 60
 

@@ -1,6 +1,6 @@
 import time
 import requests
-from app.config import ODDS_API_KEY, ODDS_API_BASE, ODDS_CACHE_TTL_SECONDS
+from app.config import ODDS_API_KEY, ODDS_API_BASE, ODDS_CACHE_TTL_SECONDS, ODDS_REGIONS
 from app.cache_utils import cache_get, cache_set, live_fetch_allowed, get_raw, set_raw, get_cache_age
 from app import sportsgameodds_client
 
@@ -46,7 +46,7 @@ def _event_odds_cache_key(event_id, markets, regions):
     return f"event_odds_{event_id}_{markets}_{regions}"
 
 
-def get_odds_age(markets="h2h,spreads,totals", regions="us"):
+def get_odds_age(markets="h2h,spreads,totals", regions=ODDS_REGIONS):
     """Seconds since the game-level (moneyline/spread/total) odds now in the
     pool were actually fetched -- only meaningful after get_odds() has
     already been called this request. Used to show "as of" freshness on
@@ -61,7 +61,7 @@ def get_event_odds_age(event_id, markets, regions="us"):
     return get_cache_age(_event_odds_cache_key(event_id, markets, regions))
 
 
-def get_odds(markets="h2h,spreads,totals", regions="us"):
+def get_odds(markets="h2h,spreads,totals", regions=ODDS_REGIONS):
     """Fetch current NFL odds across books. Cached to conserve the free-tier
     quota. Falls back to sportsgameodds_client (a separate free provider)
     when The Odds API's key is missing/rejected or its quota is exhausted --

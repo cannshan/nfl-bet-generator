@@ -28,11 +28,28 @@ def american_to_implied_prob(american):
 
 
 def devig_two_way(prob_a, prob_b):
-    """Normalize two implied probabilities that sum to >1 (due to vig) back to 100%."""
-    total = prob_a + prob_b
-    if total <= 0:
-        return prob_a, prob_b
-    return prob_a / total, prob_b / total
+    """Strip the vig from two implied probabilities using the POWER method:
+    find k so that prob_a**k + prob_b**k = 1. At even prices this is
+    identical to plain proportional scaling, but at lopsided prices it
+    assigns more of the vig to the longshot -- which is where books
+    actually load it (the well-documented favorite-longshot bias).
+    Proportional devig gives a +206 underdog vs a -234 favorite 31.8%;
+    power gives 31.1%. Small per leg, but the tickets built here lean on
+    plus-money legs, and it compounds."""
+    if prob_a <= 0 or prob_b <= 0:
+        total = prob_a + prob_b
+        return (prob_a / total, prob_b / total) if total > 0 else (prob_a, prob_b)
+    lo, hi = 0.5, 4.0
+    for _ in range(60):
+        k = (lo + hi) / 2
+        if prob_a ** k + prob_b ** k > 1:
+            lo = k
+        else:
+            hi = k
+    k = (lo + hi) / 2
+    fair_a, fair_b = prob_a ** k, prob_b ** k
+    total = fair_a + fair_b
+    return fair_a / total, fair_b / total
 
 
 def decimal_to_american(decimal_odds):
