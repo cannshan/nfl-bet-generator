@@ -31,7 +31,19 @@ TABLE = "app_cache"
 # fast regardless of size -- ~1s even for the 7MB example above); this only
 # matters for the write that happens during an explicit refresh.
 MAX_CACHEABLE_BYTES = 10_000_000
-_client = None
+# One Supabase client PER THREAD, not one shared by all of them. This
+# module is called from several thread pools at once (event props, weather,
+# expert insight, model + odds), and a single shared client -- an httpx
+# session underneath -- produced "[WinError 10035] A non-blocking socket
+# operation could not be completed immediately" read errors under that
+# load on Windows. cache_get swallowed those as "not cached", so the page
+# would silently build from a PARTIAL pool (measured: the same passive
+# load returned 360, 206, 598 and 0 legs on four consecutive runs) or
+# show nothing at all. Thread-local clients remove the sharing entirely.
+_local = threading.local()
+# A read that still fails gets one immediate retry before being treated as
+# a miss -- a transient socket error must never look like "no data".
+CACHE_READ_ATTEMPTS = 2
 
 # Two modes, controlling whether an external API call is allowed at all:
 #
@@ -78,13 +90,28 @@ def live_fetch_allowed():
 
 
 def _sb():
-    global _client
-    if _client is None:
-        _client = create_client(
+    client = getattr(_local, "client", None)
+    if client is None:
+        client = create_client(
             SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
             options=ClientOptions(postgrest_client_timeout=45),
         )
-    return _client
+        _local.client = client
+    return client
+
+
+def _select_row(key):
+    """The cache row for `key`, retried once on a transient failure. Raises
+    only if every attempt fails."""
+    last_error = None
+    for attempt in range(CACHE_READ_ATTEMPTS):
+        try:
+            rows = _sb().table(TABLE).select("data,cached_at").eq("key", key).limit(1).execute().data
+            return rows[0] if rows else None
+        except Exception as e:  # noqa: BLE001 - any transport/API failure
+            last_error = e
+            _local.client = None  # drop the (possibly wedged) connection before retrying
+    raise last_error
 
 
 def cache_get(key, ttl_seconds):
@@ -92,12 +119,12 @@ def cache_get(key, ttl_seconds):
         if key in _request_cache:
             return _request_cache[key][0]
     try:
-        rows = _sb().table(TABLE).select("data,cached_at").eq("key", key).limit(1).execute().data
-    except Exception:
+        row = _select_row(key)
+    except Exception as e:  # noqa: BLE001
+        print(f"[cache_utils] read failed for {key[:60]}: {type(e).__name__}: {e}")
         return None
-    if not rows:
+    if row is None:
         return None
-    row = rows[0]
     if _MODE == "active" and time.time() - row["cached_at"] > ttl_seconds:
         return None
     with _request_cache_lock:
@@ -138,10 +165,10 @@ def get_raw(key):
     last recorded, even on a plain passive page view, since reading it isn't
     a live fetch itself."""
     try:
-        rows = _sb().table(TABLE).select("data").eq("key", key).limit(1).execute().data
-    except Exception:
+        row = _select_row(key)
+    except Exception:  # noqa: BLE001
         return None
-    return rows[0]["data"] if rows else None
+    return row["data"] if row else None
 
 
 def set_raw(key, data):

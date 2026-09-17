@@ -25,6 +25,7 @@ no per-user auth in this app (Row Level Security bypass is intentional).
 """
 import datetime as dt
 import re
+import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from supabase import create_client, ClientOptions
@@ -44,17 +45,22 @@ TABLE = "nfl_predictions"
 # v2 = market-anchored props + correlation-adjusted parlays.
 MODEL_VERSION = "v2"
 
-_client = None
+# Per-thread client, for the same reason as cache_utils._sb(): the
+# settle/closing-line writes run 20 at a time from a thread pool, and a
+# single shared httpx session under that load threw socket read errors
+# on Windows that were swallowed as failed writes.
+_local = threading.local()
 
 
 def _sb():
-    global _client
-    if _client is None:
-        _client = create_client(
+    client = getattr(_local, "client", None)
+    if client is None:
+        client = create_client(
             SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
             options=ClientOptions(postgrest_client_timeout=20),
         )
-    return _client
+        _local.client = client
+    return client
 
 
 def log_suggestions(legs, season, week, section):
