@@ -115,10 +115,8 @@ def _build_model():
     power = ratings.compute_power_ratings(weighted_games)
     power, epa_used = _blend_with_epa(power, season)
     power, qb_injury_notes = _apply_starting_qb_injuries(power)
-    scoring = ratings.compute_scoring_averages(weighted_games)
     return {
         "power": power,
-        "scoring": scoring,
         "season": season,
         "week": week,
         "epa_used": epa_used,
@@ -198,10 +196,6 @@ def analyze_games(odds_data, model):
         home_win_prob = ratings.win_probability(home_rating, away_rating)
         away_win_prob = 1 - home_win_prob
 
-        home_scoring = model["scoring"].get(home_key, {"pf": 21.0, "pa": 21.0})
-        away_scoring = model["scoring"].get(away_key, {"pf": 21.0, "pa": 21.0})
-        predicted_total = (home_scoring["pf"] + home_scoring["pa"] + away_scoring["pf"] + away_scoring["pa"]) / 2
-
         matchup = f"{away_name} @ {home_name}"
         commence = game.get("commence_time")
 
@@ -241,17 +235,30 @@ def analyze_games(odds_data, model):
                 candidates.append(_make_leg(matchup, commence, "Spread", label, away_price_s, p, book_p))
 
         # --- Totals ---
+        # NOTE (found in a full model audit, backtested walk-forward against
+        # 2016-2025 real closing lines): predicted_total here comes from
+        # compute_scoring_averages(), a raw, NOT opponent-adjusted average --
+        # unlike the power ratings used for Moneyline/Spread. Measured
+        # residual std against real outcomes was 13.69, actually WORSE than
+        # just using the book's own total_line directly (13.17), and hit
+        # rate by confidence bucket was flat/non-monotonic (a "72% confident"
+        # bucket hit only 42% of the time). In plain terms: this signal has
+        # no demonstrated edge over the market. Rather than keep shipping a
+        # model_prob that can manufacture a false "value bet" out of noise,
+        # Total legs are priced at the devigged MARKET probability (edge
+        # ~= 0 by construction) until a real opponent-adjusted total model
+        # replaces this. They still show up in the pool/parlays at their
+        # honest fair price -- just never as a false "edge."
         total_line = _first_total_line(bookmakers)
         if total_line is not None:
             over_price = _best_price(bookmakers, "totals", "Over", total_line)
             under_price = _best_price(bookmakers, "totals", "Under", total_line)
-            p_over, p_under = ratings.total_probability(predicted_total, total_line)
-            if over_price:
-                book_p = odds_math.american_to_implied_prob(over_price["american"])
-                candidates.append(_make_leg(matchup, commence, "Total", f"Over {total_line}", over_price, p_over, book_p))
-            if under_price:
-                book_p = odds_math.american_to_implied_prob(under_price["american"])
-                candidates.append(_make_leg(matchup, commence, "Total", f"Under {total_line}", under_price, p_under, book_p))
+            if over_price and under_price:
+                book_over_p = odds_math.american_to_implied_prob(over_price["american"])
+                book_under_p = odds_math.american_to_implied_prob(under_price["american"])
+                fair_over_p, fair_under_p = odds_math.devig_two_way(book_over_p, book_under_p)
+                candidates.append(_make_leg(matchup, commence, "Total", f"Over {total_line}", over_price, fair_over_p, fair_over_p))
+                candidates.append(_make_leg(matchup, commence, "Total", f"Under {total_line}", under_price, fair_under_p, fair_under_p))
 
     # All game-level legs share one bulk odds fetch, so they share one age --
     # unlike props, which are fetched (and can go stale) one game at a time.

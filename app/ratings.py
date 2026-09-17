@@ -135,7 +135,17 @@ def cover_probability(predicted_margin_value, spread_for_home, sigma=MARGIN_SIGM
 
 
 def total_probability(predicted_total, line, sigma=TOTAL_SIGMA):
-    """Returns (p_over, p_under) for a given total line."""
+    """Returns (p_over, p_under) for a given total line.
+
+    BUG FIX (found in a full model audit): this previously computed
+    z = (predicted_total - line) / sigma and returned (1 - normal_cdf(z),
+    normal_cdf(z)) as (p_over, p_under) -- backwards. A HIGHER predicted
+    total relative to the line should mean a HIGHER P(Over), i.e.
+    p_over = normal_cdf(z) directly; the old code assigned that value to
+    p_under instead, so every Total leg's model probability was swapped
+    with its complement (e.g. a real 68% Over was shown as 32% Over / 68%
+    Under). This affected every Total recommendation and any edge
+    calculated from it since this function was written."""
     z = (predicted_total - line) / sigma
-    p_under = normal_cdf(z)
-    return 1 - p_under, p_under
+    p_over = normal_cdf(z)
+    return p_over, 1 - p_over
