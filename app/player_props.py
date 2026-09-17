@@ -101,6 +101,23 @@ MODEL_WEIGHT_VS_MARKET = 0.10
 # a second guard for the exact failure mode above (a projection several std
 # away from the market is the model missing information, not finding it).
 MAX_MODEL_TILT_SIGMAS = 0.25
+# The tilt weight also shrinks as the history projection and the market
+# disagree more: weight = MODEL_WEIGHT_VS_MARKET / (1 + |gap| / sigma). A
+# projection a full std away from the book's number is far more likely to
+# be a stale game log (a role that changed) than a real insight, so the
+# further apart they are, the LESS the history counts -- the opposite of
+# what a fixed weight does. A projection right next to the market keeps
+# the full 10%.
+# A player's game-to-game std from his own history describes the ROLE he
+# had then. When the market center sits well above his history mean (a
+# backup promoted, a rookie's role growing), that std is far too small for
+# the role he has now -- and a too-small std makes even the capped 10%
+# tilt swing the probability by several points. So for the raw-normal
+# fields the std is scaled up in proportion to how far the market center
+# exceeds the history mean (dispersion of yardage/volume stats scales with
+# level). It is never scaled DOWN: a market center below history keeps the
+# wider history std. Log-space fields are already scale-free and skip this.
+SIGMA_SCALES_WITH_MARKET = True
 
 # Opponent-defense matchup: applied only to YARDAGE fields (a defense's
 # yards-allowed says something about efficiency against it, nothing about
@@ -566,7 +583,12 @@ def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None, event_f
             market_center = _market_center(player_quotes, sigma, log_space)
             if market_center is None:
                 continue
-            tilt = MODEL_WEIGHT_VS_MARKET * (model_center - market_center)
+            if SIGMA_SCALES_WITH_MARKET and not log_space and mean > 0 and market_center > mean:
+                sigma *= market_center / mean
+                market_center = _market_center(player_quotes, sigma, log_space)
+            gap = model_center - market_center
+            tilt_weight = MODEL_WEIGHT_VS_MARKET / (1 + abs(gap) / sigma)
+            tilt = tilt_weight * gap
             tilt = max(-MAX_MODEL_TILT_SIGMAS * sigma, min(MAX_MODEL_TILT_SIGMAS * sigma, tilt))
             blended_center = market_center + tilt
 

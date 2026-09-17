@@ -4,6 +4,7 @@ book's price implies (an "edge"), plus a broader candidate pool for parlay
 construction.
 """
 from concurrent.futures import ThreadPoolExecutor
+from statistics import median
 from app import espn_client, ratings, odds_math, nflverse_client, injury_client, roster_client, odds_client
 from app.team_names import build_lookup, match
 
@@ -165,6 +166,38 @@ def _best_price(bookmakers, market_key, outcome_name, point=None):
     return best
 
 
+def _consensus_two_way(bookmakers, market_key, name_a, name_b, point_a=None, point_b=None):
+    """Market consensus (fair_a, fair_b) for a two-way market: each book's
+    own pair of prices is devigged WITHIN that book, and the median across
+    books is the consensus. Devigging the best price for side A (from one
+    book) against the best price for side B (from another) -- what an
+    earlier version did -- mixes two books' opinions and understates the
+    vig, so both sides come out a little too likely. Books that only post
+    one side, or a different point, are skipped."""
+    fair_as = []
+    for bm in bookmakers:
+        for market in bm.get("markets", []):
+            if market.get("key") != market_key:
+                continue
+            prices = {}
+            for outcome in market.get("outcomes", []):
+                name, point = outcome.get("name"), outcome.get("point")
+                if name == name_a and (point_a is None or point == point_a):
+                    prices["a"] = outcome["price"]
+                elif name == name_b and (point_b is None or point == point_b):
+                    prices["b"] = outcome["price"]
+            if "a" in prices and "b" in prices:
+                fair_a, _fair_b = odds_math.devig_two_way(
+                    odds_math.american_to_implied_prob(prices["a"]),
+                    odds_math.american_to_implied_prob(prices["b"]),
+                )
+                fair_as.append(fair_a)
+    if not fair_as:
+        return None, None
+    fair_a = median(fair_as)
+    return fair_a, 1 - fair_a
+
+
 def _first_spread_points(bookmakers, home_name, away_name):
     """Returns (home_point, away_point) from the first bookmaker that posts a spread."""
     for bm in bookmakers:
@@ -219,10 +252,8 @@ def analyze_games(odds_data, model):
         # --- Moneyline (h2h) ---
         home_price = _best_price(bookmakers, "h2h", home_name)
         away_price = _best_price(bookmakers, "h2h", away_name)
-        if home_price and away_price:
-            book_home_p = odds_math.american_to_implied_prob(home_price["american"])
-            book_away_p = odds_math.american_to_implied_prob(away_price["american"])
-            fair_home_p, fair_away_p = odds_math.devig_two_way(book_home_p, book_away_p)
+        fair_home_p, fair_away_p = _consensus_two_way(bookmakers, "h2h", home_name, away_name)
+        if home_price and away_price and fair_home_p is not None:
 
             # Market-anchored, like every other market here: the devigged
             # closing-style price is the estimate, and the power-rating model
@@ -269,10 +300,10 @@ def analyze_games(odds_data, model):
             home_point, away_point = spread_point
             home_price_s = _best_price(bookmakers, "spreads", home_name, home_point)
             away_price_s = _best_price(bookmakers, "spreads", away_name, away_point)
-            if home_price_s and away_price_s:
-                book_home_p = odds_math.american_to_implied_prob(home_price_s["american"])
-                book_away_p = odds_math.american_to_implied_prob(away_price_s["american"])
-                fair_home_p, fair_away_p = odds_math.devig_two_way(book_home_p, book_away_p)
+            fair_home_p, fair_away_p = _consensus_two_way(
+                bookmakers, "spreads", home_name, away_name, home_point, away_point,
+            )
+            if home_price_s and away_price_s and fair_home_p is not None:
                 home_label = f"{home_name} {home_point:+g}"
                 away_label = f"{away_name} {away_point:+g}"
                 candidates.append(_make_leg(matchup, commence, "Spread", home_label, home_price_s, fair_home_p, fair_home_p, team=home_name))
@@ -297,10 +328,8 @@ def analyze_games(odds_data, model):
         if total_line is not None:
             over_price = _best_price(bookmakers, "totals", "Over", total_line)
             under_price = _best_price(bookmakers, "totals", "Under", total_line)
-            if over_price and under_price:
-                book_over_p = odds_math.american_to_implied_prob(over_price["american"])
-                book_under_p = odds_math.american_to_implied_prob(under_price["american"])
-                fair_over_p, fair_under_p = odds_math.devig_two_way(book_over_p, book_under_p)
+            fair_over_p, fair_under_p = _consensus_two_way(bookmakers, "totals", "Over", "Under", total_line, total_line)
+            if over_price and under_price and fair_over_p is not None:
                 candidates.append(_make_leg(matchup, commence, "Total", f"Over {total_line}", over_price, fair_over_p, fair_over_p, side="Over"))
                 candidates.append(_make_leg(matchup, commence, "Total", f"Under {total_line}", under_price, fair_under_p, fair_under_p, side="Under"))
 

@@ -28,6 +28,13 @@ CROSS_GAME_CANDIDATE_POOL_SIZE = 16
 # parlay is never going to be a 10% shot, and a fixed floor would quietly
 # collapse every search down to a cheap 3-legger regardless of the target.
 MIN_PROB_VS_FAIR = 0.5
+# The three tickets shown should be genuinely different bets, not the same
+# ticket with one leg swapped (which is what "top 3 by probability" gives,
+# since the best combo's neighbors are always next). Each later ticket may
+# share at most this fraction of its legs with any earlier one; if the
+# band can't supply enough that different, the limit relaxes one leg at a
+# time rather than showing near-duplicates or nothing.
+MAX_SHARED_LEG_FRACTION = 0.5
 
 
 def combo_stats(combo, stake, pair_lifts=None):
@@ -156,6 +163,34 @@ def _drop_redundant_favorite_bets(legs):
     return [leg for leg in legs if id(leg) not in dropped_ids]
 
 
+def _leg_key(leg):
+    return (leg["matchup"], leg["player"]) if leg.get("player") else (leg["matchup"], leg["market"], leg["selection"])
+
+
+def pick_diverse(combos, num_results, max_shared_fraction=MAX_SHARED_LEG_FRACTION):
+    """Greedy: walk the combos in rank order, keeping one only if it shares
+    no more than the allowed number of legs with every combo already kept.
+    Relaxes the allowance a leg at a time if that yields fewer than
+    num_results, so the result is always the most-different set the band
+    can offer, in probability order within the constraint."""
+    if not combos:
+        return []
+    size = max(len(c) for c in combos)
+    allowance = int(size * max_shared_fraction)
+    while True:
+        chosen, chosen_keys = [], []
+        for combo in combos:
+            keys = {_leg_key(leg) for leg in combo}
+            if all(len(keys & prior) <= allowance for prior in chosen_keys):
+                chosen.append(combo)
+                chosen_keys.append(keys)
+                if len(chosen) == num_results:
+                    return chosen
+        if allowance >= size or len(chosen) == len(combos):
+            return chosen
+        allowance += 1
+
+
 def find_best_odds_parlays(pool, stake, target_payout, num_results=3, pool_size=CROSS_GAME_CANDIDATE_POOL_SIZE):
     """The 'statistically best bets' parlay: no restriction on which games a
     leg can come from -- purely chases the highest achievable hit probability
@@ -169,7 +204,7 @@ def find_best_odds_parlays(pool, stake, target_payout, num_results=3, pool_size=
     legs = _drop_redundant_favorite_bets(dedupe_best_per_bet(pool))
     legs = sorted(legs, key=lambda l: l["edge"] - 0.05 * l.get("category_cv", 0.5), reverse=True)[:pool_size]
     matches = search_near_target(legs, stake, target_payout)
-    return [build_result(combo, stake) for combo in matches[:num_results]]
+    return [build_result(combo, stake) for combo in pick_diverse(matches, num_results)]
 
 
 def best_effort_combo(legs, stake, max_legs=MAX_LEGS_SEARCHED):

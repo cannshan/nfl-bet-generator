@@ -57,8 +57,12 @@ against the real result once the game is played — see below.
   from a **consensus market center** solved from every book's devigged
   two-sided quote (a book quoting Over 271.5 at 45% is saying the median
   sits a bit under 271.5; the median across books is the consensus), then
-  tilted 10% of the way toward this app's own game-log projection, capped at
-  a quarter of the player's game-to-game standard deviation. That weight was
+  tilted up to 10% of the way toward this app's own game-log projection —
+  less the further the two disagree, since a projection a full standard
+  deviation from the book's number is far more likely a stale game log than
+  an insight — and capped at a quarter of the player's game-to-game standard
+  deviation (which is itself scaled up when the market implies a bigger role
+  than the player's history shows). That weight was
   fit, not chosen: the app's first 19 settled prop suggestions were shown at
   an average 75% confidence and hit 37% of the time, and the log-loss-
   minimizing weight on the pure game-log model against those outcomes was
@@ -206,7 +210,10 @@ against the real result once the game is played — see below.
   instinct made concrete, applied to the number itself rather than left as
   a comment nobody has to act on.
 - **Statistically Best Bets**: a target-payout search over the whole week's
-  pool, ranked by edge discounted for category reliability. It never puts
+  pool — or, when a focus game is chosen, over that game only (its props plus
+  its own spread/total/moneyline) — ranked by edge discounted for category
+  reliability. The three tickets shown are forced to differ: each shares at
+  most half its legs with any earlier one. It never puts
   two legs on the same player in one ticket (a QB's attempts, completions
   and passing yards are ~0.6-0.7 correlated in real outcomes — one bet in
   three disguises), and keeps only the better of a team's own spread vs.
