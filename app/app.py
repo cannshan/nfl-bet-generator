@@ -310,15 +310,25 @@ def _exact_signature(d):
 @app.route("/api/redo-leg", methods=["POST"])
 def redo_leg():
     """Swaps one leg of an already-built parlay for a different, still-live
-    candidate from the same game -- e.g. a receiver's odd rushing-yards prop
-    for one of his receiving props instead. Recomputes nothing about the rest
-    of the parlay server-side; the client re-derives payout/odds/probability
-    from every leg's own decimal odds and model probability after the swap."""
+    candidate from the same game, chosen IN THE CONTEXT OF THE OTHER LEGS:
+    every candidate is scored as part of the whole ticket (correlation-
+    adjusted joint probability, payout near the target) rather than on its
+    own. A same-game ticket is usually a correlated stack -- its hit chance
+    comes largely from legs that tend to win together -- so a replacement
+    picked on its standalone merits could be negatively correlated with
+    the rest and collapse the ticket (seen in practice: one swap took a
+    card from -10% EV to -46%). `exclude` carries the other legs with the
+    fields the joint calculation needs; `stake`/`target` are the card's."""
     data = request.get_json(silent=True) or {}
     matchup = data.get("matchup")
     current = data.get("current") or {}
     exclude = data.get("exclude") or []
     show_matchup = bool(data.get("show_matchup"))
+    try:
+        stake = float(data.get("stake") or DEFAULT_STAKE)
+        target = float(data.get("target") or DEFAULT_TARGET_PAYOUT)
+    except (TypeError, ValueError):
+        stake, target = DEFAULT_STAKE, DEFAULT_TARGET_PAYOUT
 
     if not matchup:
         return jsonify({"error": "Missing matchup."}), 400
@@ -356,7 +366,24 @@ def redo_leg():
             [l for l in game_legs if l.get("player")],
         ]
 
-    score = parlay_builder.rank_score
+    others = []
+    for e in exclude:
+        try:
+            others.append({**e, "decimal_odds": float(e["decimal_odds"]), "model_prob": float(e["model_prob"])})
+        except (KeyError, TypeError, ValueError):
+            pass  # an old client without the stats fields -> fall back to standalone scoring below
+
+    def in_context(leg):
+        """(keeps payout near target, joint hit probability) -- the same
+        objective the original search used, applied to this one swap."""
+        combo = others + [leg]
+        if not parlay_builder._combo_allowed(combo):
+            return (-1, -1.0)
+        dec_odds, payout, joint = parlay_builder.combo_stats(combo, stake)
+        near_target = 1 if abs(payout - target) <= 0.5 * target else 0
+        return (near_target, joint)
+
+    score = in_context if others else parlay_builder.rank_score
 
     candidate = None
     for group in search_order:
@@ -364,6 +391,8 @@ def redo_leg():
             l for l in group
             if _leg_signature(l) not in excluded and _exact_signature(l) not in excluded_exact
         ]
+        if others:
+            options = [l for l in options if in_context(l)[0] >= 0]
         if options:
             candidate = max(options, key=score)
             break

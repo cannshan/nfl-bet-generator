@@ -136,7 +136,7 @@
     <h2>Statistically Best Bets (${{ stake }} → ~${{ target|round(0) }}){% if offer_book %} <span class="offer-book">· {{ offer_book }} lines &amp; prices</span>{% endif %}</h2>
     <div class="parlay-grid">
       {% for p in best_odds_parlays %}
-      <div class="parlay-card" data-stake="{{ stake }}">
+      <div class="parlay-card" data-stake="{{ stake }}" data-target="{{ target }}">
         <div class="card-header">
           <div class="card-title-wrap">
             <h3 class="card-title">{{ p.num_legs }}-Leg Parlay</h3>
@@ -254,9 +254,11 @@
         if (!li || !ul || !card) return;
 
         var current = legSignatureFromDataset(li.dataset);
+        // The other legs go over with their stats fields so the server can
+        // score each replacement as part of the whole ticket.
         var exclude = Array.prototype.slice.call(ul.querySelectorAll("li.leg-item"))
           .filter(function (sib) { return sib !== li; })
-          .map(function (sib) { return legSignatureFromDataset(sib.dataset); });
+          .map(legForStats);
 
         var showMatchup = !!li.querySelector(".leg-matchup");
         var originalHtml = btn.innerHTML;
@@ -270,6 +272,8 @@
             matchup: li.dataset.matchup,
             current: current,
             exclude: exclude,
+            stake: parseFloat(card.dataset.stake) || 5,
+            target: parseFloat(card.dataset.target) || 1000,
             show_matchup: showMatchup,
           }),
         })
