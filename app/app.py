@@ -110,13 +110,22 @@ def _run_bets_pipeline(stake, target, include_props, include_insight, event_filt
     cached gets reused regardless of age) as well as from an explicit
     refresh action (mode 'active': stale/missing cache entries actually
     refetch). Callers are responsible for setting the mode first.
-    `event_filter`: see player_props.get_player_prop_candidates."""
+    `event_filter`: see player_props.get_player_prop_candidates.
+
+    The tracking writes below (settling old predictions, logging new
+    suggestions, capturing closing lines) only matter when the pool actually
+    might have changed, i.e. during an explicit refresh -- on a plain page
+    view the pool is whatever was already cached, so these would just be
+    idempotent no-op writes hitting Supabase for no reason (measured: ~240
+    redundant round trips on a single passive page load). Gated on the same
+    active/passive mode as the live fetches for that reason."""
     error = None
     pool, meta, cards, best_odds_parlays = [], {}, [], []
-    try:
-        tracking.settle_pending()
-    except Exception:
-        pass
+    if cache_utils.live_fetch_allowed():
+        try:
+            tracking.settle_pending()
+        except Exception:
+            pass
     try:
         _value_bets, pool, meta = value_finder.get_value_bets_and_pool(
             include_props=include_props, event_filter=event_filter,
@@ -126,11 +135,12 @@ def _run_bets_pipeline(stake, target, include_props, include_insight, event_filt
         elif pool:
             cards = game_cards.build_game_cards(pool, stake, target, include_insight=include_insight)
             best_odds_parlays = parlay_builder.find_best_odds_parlays(pool, stake, target)
-            _record_suggestions(cards, best_odds_parlays, meta.get("season"), meta.get("week"))
-            try:
-                tracking.capture_closing_lines(pool)
-            except Exception:
-                pass
+            if cache_utils.live_fetch_allowed():
+                _record_suggestions(cards, best_odds_parlays, meta.get("season"), meta.get("week"))
+                try:
+                    tracking.capture_closing_lines(pool)
+                except Exception:
+                    pass
     except odds_client.OddsApiError as e:
         error = str(e)
     except Exception as e:  # surface any other failure plainly rather than a blank page
@@ -222,11 +232,10 @@ def refresh_injuries():
 
 @app.route("/track-record")
 def track_record():
+    # Settling predictions is a write, not a fetch -- handled by /refresh-bets
+    # and /refresh-settlements (both active mode) instead of on every plain
+    # visit here, which used to re-run it as a no-op every time.
     cache_utils.set_mode("passive")
-    try:
-        tracking.settle_pending()
-    except Exception:
-        pass
     return render_template("track_record.html", record=tracking.get_track_record())
 
 
