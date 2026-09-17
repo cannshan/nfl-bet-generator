@@ -19,6 +19,7 @@ the actual, correlation-adjusted price only exists in your sportsbook's own
 Same Game Parlay builder once you enter the same legs there.
 """
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from app import parlay_builder, formatting, expert_insight
 
 PROPS_POOL_SIZE = 12
@@ -116,10 +117,40 @@ def _candidate_legs_for_game(legs, matchup, kickoff_et, include_insight):
     return props + others
 
 
+def _prefetch_expert_insight(by_game):
+    """Each game's expert-insight call is a slow, independent LLM+web-search
+    round trip (multiple seconds each) that get_expert_insight caches for 4
+    hours -- but the per-game loop in build_game_cards calls it one game at a
+    time, so a cold cache (a fresh deployment, or just past the 4h TTL) turns
+    into N sequential multi-second calls in a row, dominating the whole
+    refresh. Warming them all concurrently first means that same cold-cache
+    cost is paid once, in parallel, rather than serially; the loop below then
+    always hits a warm cache."""
+    if not expert_insight.is_configured():
+        return
+
+    def _warm(item):
+        matchup, legs = item
+        players = sorted({l["player"] for l in legs if l.get("player") and l["market"].startswith("Player Prop")})
+        if not players:
+            return
+        kickoff_et = formatting.format_kickoff_et(legs[0].get("commence_time"))
+        try:
+            expert_insight.get_expert_insight(matchup, players, kickoff_et)
+        except Exception:
+            pass
+
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        list(pool.map(_warm, by_game.items()))
+
+
 def build_game_cards(pool, stake, target_payout, include_insight=True):
     by_game = defaultdict(list)
     for leg in pool:
         by_game[leg["matchup"]].append(leg)
+
+    if include_insight:
+        _prefetch_expert_insight(by_game)
 
     cards = []
     for matchup, legs in by_game.items():
