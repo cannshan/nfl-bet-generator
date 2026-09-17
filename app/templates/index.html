@@ -149,9 +149,6 @@
             <span class="prob ev {% if p.ev_pct >= 0 %}ev-pos{% else %}ev-neg{% endif %}" title="Expected value of the ticket after the books' vig, at the listed prices. For same-game legs the listed combined odds are the naive product -- a sportsbook's SGP builder will quote less for correlated legs, so treat this as an upper bound.">EV <span class="ev-value">{{ '%+.0f'|format(p.ev_pct) }}</span>%<span class="ev-caveat" {% if not p.has_same_game_legs %}hidden{% endif %}> at listed prices</span></span>
           </div>
         </div>
-        <div class="odds-line">
-          <span class="combined-odds">{{ '%+d'|format(p.american_equivalent) }}</span> combined odds
-        </div>
         <ul>
           {% for leg in p.legs %}
             {{ legs.render_leg(leg, show_matchup=True) }}
@@ -219,8 +216,6 @@
         var stake = parseFloat(card.dataset.stake) || 5;
         var payoutEl = card.querySelector(".payout-value");
         if (payoutEl) payoutEl.textContent = formatMoney(stake * decProduct);
-        var oddsEl = card.querySelector(".combined-odds");
-        if (oddsEl) oddsEl.textContent = formatAmerican(decimalToAmerican(decProduct));
         var probEl = card.querySelector(".prob-value");
         if (probEl) probEl.textContent = "…";
 
