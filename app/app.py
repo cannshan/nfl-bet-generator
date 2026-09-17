@@ -1,7 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, render_template, request, jsonify, redirect, url_for
 from app.config import DEFAULT_STAKE, DEFAULT_TARGET_PAYOUT, BOOKMAKER_KEY
-from app import value_finder, odds_client, game_cards, parlay_builder, expert_insight, injury_client, tracking, cache_utils
+from app import value_finder, odds_client, game_cards, parlay_builder, expert_insight, injury_client, tracking, cache_utils, formatting
 
 
 def _coherent(pool):
@@ -15,6 +15,9 @@ def _coherent(pool):
 # so both local dev (`python run.py`) and Vercel resolve the same file at the
 # same URL (e.g. /style.css) from the same single copy on disk.
 app = Flask(__name__, static_folder="../public", static_url_path="")
+# Kickoff times come from the odds feed as UTC; every place the UI shows
+# one goes through this so they're always Eastern.
+app.jinja_env.filters["kickoff_et"] = formatting.format_kickoff_et
 
 
 @app.before_request

@@ -25,6 +25,8 @@ body {
 
 header h1 { margin-bottom: 4px; }
 
+.card-kickoff { font-size: 12px; color: var(--text); margin-top: 2px; }
+.leg-kickoff { font-weight: 400; text-transform: none; letter-spacing: 0; opacity: 0.85; }
 .odds-age { color: var(--muted); font-size: 12px; margin-top: 2px; }
 
 .quota-bar { margin-bottom: 16px; }

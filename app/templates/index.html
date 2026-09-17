@@ -140,6 +140,7 @@
         <div class="card-header">
           <div class="card-title-wrap">
             <h3 class="card-title">{{ p.num_legs }}-Leg Parlay</h3>
+            {% if p.kickoff_et %}<div class="card-kickoff" title="Kickoff, Eastern time{% if p.spans_multiple_kickoffs %} (earliest leg; others kick off later){% endif %}">🕒 {{ p.kickoff_et }}{% if p.spans_multiple_kickoffs %} (first leg){% endif %}</div>{% endif %}
             {% if p.odds_age_display %}<div class="odds-age" title="How long ago these odds were fetched">Odds as of {{ p.odds_age_display }}</div>{% endif %}
           </div>
           <div class="payout-badge">

@@ -10,7 +10,7 @@
       data-side="{{ leg.side or '' }}"
       data-decimal-odds="{{ leg.decimal_odds }}"
       data-model-prob="{{ leg.model_prob }}">
-    {% if show_matchup %}<div class="leg-matchup">{{ leg.matchup }}</div>{% endif %}
+    {% if show_matchup %}<div class="leg-matchup">{{ leg.matchup }}{% if leg.commence_time %} <span class="leg-kickoff">· {{ leg.commence_time|kickoff_et }}</span>{% endif %}</div>{% endif %}
     <div class="leg-row">
       <div class="leg-main">
         {% if leg.player %}

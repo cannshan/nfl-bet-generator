@@ -55,6 +55,7 @@ def build_result(combo, stake):
     breakeven_prob = 1.0 / dec_odds
     matchups = [leg["matchup"] for leg in combo]
     ages = [leg["odds_age_seconds"] for leg in combo if leg.get("odds_age_seconds") is not None]
+    kickoffs = sorted(leg["commence_time"] for leg in combo if leg.get("commence_time"))
     return {
         "legs": list(combo),
         "decimal_odds": dec_odds,
@@ -68,6 +69,10 @@ def build_result(combo, stake):
         "has_same_game_legs": len(set(matchups)) < len(matchups),
         "odds_age_seconds": max(ages) if ages else None,
         "odds_age_display": formatting.format_odds_age(max(ages) if ages else None),
+        # Earliest kickoff among the legs, Eastern time -- the moment the
+        # ticket has to be placed by (and the first leg starts settling).
+        "kickoff_et": formatting.format_kickoff_et(kickoffs[0]) if kickoffs else None,
+        "spans_multiple_kickoffs": len(set(kickoffs)) > 1,
     }
 
 
