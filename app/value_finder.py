@@ -3,6 +3,7 @@ where the model's win probability is meaningfully higher than what the
 book's price implies (an "edge"), plus a broader candidate pool for parlay
 construction.
 """
+from concurrent.futures import ThreadPoolExecutor
 from app import espn_client, ratings, odds_math, nflverse_client, injury_client, roster_client
 from app.team_names import build_lookup, match
 
@@ -266,11 +267,19 @@ def get_value_bets_and_pool(markets="h2h,spreads,totals", include_props=True, ev
     """
     from app import odds_client
 
-    model = _build_model()
+    # _build_model() (season games, ratings, injuries -- all cache reads) and
+    # get_odds() don't depend on each other at all, but used to run one after
+    # the other; fetching both concurrently overlaps their cache round trips
+    # instead of paying for them back to back.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_model = pool.submit(_build_model)
+        f_odds = pool.submit(odds_client.get_odds, markets=markets)
+        model = f_model.result()
+        odds_data = f_odds.result()
+
     if model is None:
         return [], [], {"error": "No historical game data available to build ratings yet."}
 
-    odds_data = odds_client.get_odds(markets=markets)
     candidates = analyze_games(odds_data, model)
 
     props_used = False
