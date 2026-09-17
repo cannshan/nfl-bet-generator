@@ -90,7 +90,7 @@ def _sb():
 def cache_get(key, ttl_seconds):
     with _request_cache_lock:
         if key in _request_cache:
-            return _request_cache[key]
+            return _request_cache[key][0]
     try:
         rows = _sb().table(TABLE).select("data,cached_at").eq("key", key).limit(1).execute().data
     except Exception:
@@ -101,18 +101,31 @@ def cache_get(key, ttl_seconds):
     if _MODE == "active" and time.time() - row["cached_at"] > ttl_seconds:
         return None
     with _request_cache_lock:
-        _request_cache[key] = row["data"]
+        _request_cache[key] = (row["data"], row["cached_at"])
     return row["data"]
 
 
-def cache_set(key, data):
+def get_cache_age(key):
+    """Seconds since `key` was cached, from whatever this SAME request already
+    looked up via cache_get -- not an extra Supabase round trip. Returns None
+    if cache_get hasn't been called for this key yet this request (e.g. a
+    cache miss, or simply not looked up)."""
     with _request_cache_lock:
-        _request_cache[key] = data
+        entry = _request_cache.get(key)
+    if not entry or entry[1] is None:
+        return None
+    return time.time() - entry[1]
+
+
+def cache_set(key, data):
+    now = time.time()
+    with _request_cache_lock:
+        _request_cache[key] = (data, now)
     try:
         if len(json.dumps(data)) > MAX_CACHEABLE_BYTES:
             return
         _sb().table(TABLE).upsert(
-            {"key": key, "data": data, "cached_at": time.time()},
+            {"key": key, "data": data, "cached_at": now},
             on_conflict="key",
         ).execute()
     except Exception:

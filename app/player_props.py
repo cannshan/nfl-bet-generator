@@ -286,7 +286,8 @@ def _fetch_event_odds_and_weather(event, markets):
     home = event_odds.get("home_team")
     commence = event_odds.get("commence_time")
     weather = weather_client.get_game_weather(home, commence) if home else None
-    return event_odds, weather
+    odds_age = odds_client.get_event_odds_age(event["id"], markets)
+    return event_odds, weather, odds_age
 
 
 def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None, event_filter=None):
@@ -345,7 +346,7 @@ def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None, event_f
     for event, fetched_result in zip(events, fetched):
         if fetched_result is None:
             continue
-        event_odds, weather = fetched_result
+        event_odds, weather, odds_age = fetched_result
 
         home = event_odds.get("home_team")
         away = event_odds.get("away_team")
@@ -472,6 +473,7 @@ def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None, event_f
                 stale_data_note=stale_data_note, weather_note=weather_note, qb_out_note=qb_out_note,
                 return_risk_note=return_risk_note,
                 category_cv=reliability.get(field, 0.5),
+                odds_age_seconds=odds_age,
             )
 
             market_label = f"Player Prop: {label}"

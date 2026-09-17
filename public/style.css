@@ -25,6 +25,8 @@ body {
 
 header h1 { margin-bottom: 4px; }
 
+.odds-age { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
 .quota-bar { margin-bottom: 16px; }
 .quota-bar-label { color: var(--muted); font-size: 13px; margin-bottom: 4px; }
 .quota-bar-track {

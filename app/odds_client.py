@@ -1,7 +1,7 @@
 import time
 import requests
 from app.config import ODDS_API_KEY, ODDS_API_BASE, ODDS_CACHE_TTL_SECONDS
-from app.cache_utils import cache_get, cache_set, live_fetch_allowed, get_raw, set_raw
+from app.cache_utils import cache_get, cache_set, live_fetch_allowed, get_raw, set_raw, get_cache_age
 from app import sportsgameodds_client
 
 SPORT_KEY = "americanfootball_nfl"
@@ -38,6 +38,29 @@ def get_quota_usage():
     return get_raw(QUOTA_CACHE_KEY)
 
 
+def _odds_cache_key(markets, regions):
+    return f"odds_{markets}_{regions}"
+
+
+def _event_odds_cache_key(event_id, markets, regions):
+    return f"event_odds_{event_id}_{markets}_{regions}"
+
+
+def get_odds_age(markets="h2h,spreads,totals", regions="us"):
+    """Seconds since the game-level (moneyline/spread/total) odds now in the
+    pool were actually fetched -- only meaningful after get_odds() has
+    already been called this request. Used to show "as of" freshness on
+    cards, since a passive page view can be serving data of any age."""
+    return get_cache_age(_odds_cache_key(markets, regions))
+
+
+def get_event_odds_age(event_id, markets, regions="us"):
+    """Same idea as get_odds_age() but for one event's player-props odds --
+    each game's props are fetched/refreshed independently, so their ages can
+    differ a lot from each other and from the game-level odds."""
+    return get_cache_age(_event_odds_cache_key(event_id, markets, regions))
+
+
 def get_odds(markets="h2h,spreads,totals", regions="us"):
     """Fetch current NFL odds across books. Cached to conserve the free-tier
     quota. Falls back to sportsgameodds_client (a separate free provider)
@@ -46,7 +69,7 @@ def get_odds(markets="h2h,spreads,totals", regions="us"):
     500 requests) to be worth a real fallback rather than just an error
     banner. The Odds API is always tried first; the fallback only engages
     on an actual failure."""
-    cache_key = f"odds_{markets}_{regions}"
+    cache_key = _odds_cache_key(markets, regions)
     cached = cache_get(cache_key, ODDS_CACHE_TTL_SECONDS)
     if cached is not None:
         return cached
@@ -151,7 +174,7 @@ def get_event_odds(event_id, markets, regions="us", home_team=None, away_team=No
     with REAL Odds-API event ids even while this quota-limited endpoint is
     failing -- passing team names lets the fallback match by team instead of
     by id when the id namespaces don't line up (see sportsgameodds_client)."""
-    cache_key = f"event_odds_{event_id}_{markets}_{regions}"
+    cache_key = _event_odds_cache_key(event_id, markets, regions)
     cached = cache_get(cache_key, ODDS_CACHE_TTL_SECONDS)
     if cached is not None:
         return cached

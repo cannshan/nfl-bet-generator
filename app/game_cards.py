@@ -169,6 +169,12 @@ def build_game_cards(pool, stake, target_payout, include_insight=True):
         best["kickoff_et"] = kickoff_et
         best["hit_target"] = bool(matches)
         best["has_props"] = any(leg.get("player") for leg in best["legs"])
+        # Show the OLDEST leg's age, not an average/newest -- a card is only
+        # as fresh as its stalest piece, since each game's props and the
+        # shared game-level odds can each have been fetched at different times.
+        ages = [leg["odds_age_seconds"] for leg in best["legs"] if leg.get("odds_age_seconds") is not None]
+        best["odds_age_seconds"] = max(ages) if ages else None
+        best["odds_age_display"] = formatting.format_odds_age(best["odds_age_seconds"])
         cards.append(best)
 
     # Closest to the target payout first, tie-broken by higher hit probability

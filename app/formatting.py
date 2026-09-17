@@ -17,3 +17,24 @@ def format_kickoff_et(commence_time_iso):
     hour12 = dt_et.hour % 12 or 12
     ampm = "AM" if dt_et.hour < 12 else "PM"
     return f"{dt_et.strftime('%a')} {dt_et.month}/{dt_et.day} {hour12}:{dt_et.strftime('%M')} {ampm} ET"
+
+
+def format_odds_age(age_seconds):
+    """How long ago this leg's odds were actually fetched, e.g. 'just now',
+    '12m ago', '3h ago'. A plain page view can serve odds of very different
+    ages for different games (each game's props refresh independently), so
+    this is shown per-card/per-leg rather than assumed to always be fresh.
+    Returns None if the age isn't known (e.g. never fetched yet)."""
+    if age_seconds is None:
+        return None
+    age_seconds = max(0, age_seconds)
+    if age_seconds < 60:
+        return "just now"
+    minutes = round(age_seconds / 60)
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = round(age_seconds / 3600)
+    if hours < 24:
+        return f"{hours}h ago"
+    days = round(age_seconds / 86400)
+    return f"{days}d ago"

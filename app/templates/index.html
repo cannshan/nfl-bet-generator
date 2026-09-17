@@ -148,6 +148,7 @@
           <div class="card-title-wrap">
             <h3 class="card-title">{{ card.matchup }}</h3>
             {% if card.kickoff_et %}<div class="kickoff">{{ card.kickoff_et }}</div>{% endif %}
+            {% if card.odds_age_display %}<div class="odds-age" title="How long ago these odds were fetched">Odds as of {{ card.odds_age_display }}</div>{% endif %}
           </div>
           <div class="payout-badge">
             <span class="payout">$<span class="payout-value">{{ card.payout }}</span></span>
@@ -180,6 +181,7 @@
         <div class="card-header">
           <div class="card-title-wrap">
             <h3 class="card-title">{{ p.num_legs }}-Leg Parlay</h3>
+            {% if p.odds_age_display %}<div class="odds-age" title="How long ago these odds were fetched">Odds as of {{ p.odds_age_display }}</div>{% endif %}
           </div>
           <div class="payout-badge">
             <span class="payout">$<span class="payout-value">{{ p.payout }}</span></span>

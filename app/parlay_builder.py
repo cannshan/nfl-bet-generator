@@ -11,7 +11,7 @@ explicit to the user (see the disclaimer in index.html), not something this
 module pretends is exact.
 """
 import itertools
-from app import odds_math
+from app import odds_math, formatting
 
 MAX_LEGS_SEARCHED = 8
 CROSS_GAME_CANDIDATE_POOL_SIZE = 14
@@ -117,6 +117,9 @@ def find_best_odds_parlays(pool, stake, target_payout, num_results=3, pool_size=
     for r in results:
         matchups = [leg["matchup"] for leg in r["legs"]]
         r["has_same_game_legs"] = len(set(matchups)) < len(matchups)
+        ages = [leg["odds_age_seconds"] for leg in r["legs"] if leg.get("odds_age_seconds") is not None]
+        r["odds_age_seconds"] = max(ages) if ages else None
+        r["odds_age_display"] = formatting.format_odds_age(r["odds_age_seconds"])
     return results
 
 

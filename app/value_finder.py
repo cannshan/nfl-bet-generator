@@ -4,7 +4,7 @@ book's price implies (an "edge"), plus a broader candidate pool for parlay
 construction.
 """
 from concurrent.futures import ThreadPoolExecutor
-from app import espn_client, ratings, odds_math, nflverse_client, injury_client, roster_client
+from app import espn_client, ratings, odds_math, nflverse_client, injury_client, roster_client, odds_client
 from app.team_names import build_lookup, match
 
 MIN_EDGE_FOR_VALUE_BET = 0.02   # 2 percentage points of model edge over the devigged book price
@@ -253,6 +253,12 @@ def analyze_games(odds_data, model):
                 book_p = odds_math.american_to_implied_prob(under_price["american"])
                 candidates.append(_make_leg(matchup, commence, "Total", f"Under {total_line}", under_price, p_under, book_p))
 
+    # All game-level legs share one bulk odds fetch, so they share one age --
+    # unlike props, which are fetched (and can go stale) one game at a time.
+    odds_age = odds_client.get_odds_age()
+    for leg in candidates:
+        leg["odds_age_seconds"] = odds_age
+
     return candidates
 
 
@@ -265,8 +271,6 @@ def get_value_bets_and_pool(markets="h2h,spreads,totals", include_props=True, ev
     `event_filter`: see player_props.get_player_prop_candidates -- narrows
     which games get a (costly, one-call-per-event) props fetch.
     """
-    from app import odds_client
-
     # _build_model() (season games, ratings, injuries -- all cache reads) and
     # get_odds() don't depend on each other at all, but used to run one after
     # the other; fetching both concurrently overlaps their cache round trips
