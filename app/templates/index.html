@@ -104,7 +104,7 @@
       <select name="focus_game">
         <option value="" {% if not focus_game %}selected{% endif %}>All games</option>
         {% for g in available_games %}
-          <option value="{{ g }}" {% if g == focus_game %}selected{% endif %}>{{ g }}</option>
+          <option value="{{ g.value }}" {% if g.value == focus_game %}selected{% endif %}>{{ g.value }}{% if g.kickoff_et %} — {{ g.kickoff_et }}{% endif %}</option>
         {% endfor %}
       </select>
     </label>

@@ -105,7 +105,13 @@ def _available_games():
         if not home or not away or (home, away) in seen:
             continue
         seen.add((home, away))
-        games.append(f"{away} @ {home}")
+        games.append({
+            "value": f"{away} @ {home}",  # what the filter keys on -- unchanged
+            "kickoff_iso": e.get("commence_time") or "",
+            "kickoff_et": formatting.format_kickoff_et(e.get("commence_time")),
+        })
+    # Kickoff order, so the dropdown reads like the week's schedule.
+    games.sort(key=lambda g: g["kickoff_iso"])
     return games
 
 
