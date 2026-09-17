@@ -7,8 +7,19 @@ from concurrent.futures import ThreadPoolExecutor
 from app import espn_client, ratings, odds_math, nflverse_client, injury_client, roster_client, odds_client
 from app.team_names import build_lookup, match
 
-MIN_EDGE_FOR_VALUE_BET = 0.02   # 2 percentage points of model edge over the devigged book price
+MIN_EDGE_FOR_VALUE_BET = 0.02   # 2 percentage points of model probability over the breakeven price (i.e. +EV after vig)
 MIN_PROB_FOR_PARLAY_LEG = 0.50  # don't include legs the model thinks are coinflip-or-worse
+# How far a Moneyline probability moves from the devigged market price
+# toward the power-rating model. Backtested walk-forward over 2,118 games
+# with a real closing moneyline (2018-2025, scripts/backtest_moneyline.py):
+# the log-loss-minimizing weight was 0.00, every step toward the model
+# made predictions worse, and in the games where the model disagreed with
+# the market by 15+ points the market was right (model avg 60%, market 39%,
+# actual 35%). Flat-betting every side the model liked by 5+ points lost
+# 7.6% at closing prices. Kept as a constant (rather than deleting the
+# model) so the machinery stays testable if the rating model ever improves
+# -- but the evidence says leave it at 0.
+MODEL_WEIGHT_VS_MARKET_MONEYLINE = 0.0
 EPA_BLEND_WEIGHT = 0.55  # how much of the final rating comes from EPA vs. raw scoring margin
 
 # Rough, widely-cited handicapping heuristic: losing the starting QB costs a
@@ -206,35 +217,30 @@ def analyze_games(odds_data, model):
             book_away_p = odds_math.american_to_implied_prob(away_price["american"])
             fair_home_p, fair_away_p = odds_math.devig_two_way(book_home_p, book_away_p)
 
-            # BUG FIX (found in a full model audit, backtested against 5,250
-            # real (game, side) moneyline observations, 2016-2025): when the
-            # market's own fair probability for a side is already above our
-            # calibration ceiling (WIN_PROB_CEILING, ~75.3%), our capped
-            # model_prob is MECHANICALLY forced below it -- not because the
-            # model independently disagrees, but because it structurally
-            # can't express more confidence than the ceiling. That created a
-            # systematic "fade the real favorite / back the real underdog"
-            # signal with no genuine insight behind it. Backtested result:
-            # real favorites priced above the ceiling won at roughly their
-            # market rate (67.9% actual vs 65.7% book-implied) -- the
-            # market's confidence there was justified. Betting the resulting
-            # "edge" was a LOSING strategy (the more edge it claimed, the
-            # worse it did: -42% ROI in the highest-edge bucket). Deferring
-            # to the market's own price whenever it's outside our validated
-            # range -- same principle as the Totals fix -- removes this
-            # mechanical false edge without needing to touch the ceiling
-            # itself (which IS correctly calibrated for probabilities the
-            # model can actually differentiate).
+            # Market-anchored, like every other market here: the devigged
+            # closing-style price is the estimate, and the power-rating model
+            # only tilts it by MODEL_WEIGHT_VS_MARKET_MONEYLINE (currently 0
+            # -- see that constant for the backtest that put it there). An
+            # earlier version used the model's own probability outright
+            # inside its calibrated range and deferred to the market only
+            # above WIN_PROB_CEILING; that still let the model claim 15-20
+            # point edges on underdogs that the backtest shows were pure
+            # noise. The ceiling deferral is kept as a second guard: the
+            # model structurally can't express more confidence than ~75%,
+            # so above it the "disagreement" is mechanical, not real.
             if fair_home_p > ratings.WIN_PROB_CEILING or fair_away_p > ratings.WIN_PROB_CEILING:
                 home_win_prob, away_win_prob = fair_home_p, fair_away_p
+            else:
+                home_win_prob = fair_home_p + MODEL_WEIGHT_VS_MARKET_MONEYLINE * (home_win_prob - fair_home_p)
+                away_win_prob = 1 - home_win_prob
 
             candidates.append(_make_leg(
                 matchup, commence, "Moneyline", home_name, home_price,
-                home_win_prob, fair_home_p,
+                home_win_prob, fair_home_p, team=home_name,
             ))
             candidates.append(_make_leg(
                 matchup, commence, "Moneyline", away_name, away_price,
-                away_win_prob, fair_away_p,
+                away_win_prob, fair_away_p, team=away_name,
             ))
 
         # --- Spread --- (find the posted point from the first book that has one; then
@@ -262,8 +268,8 @@ def analyze_games(odds_data, model):
                 fair_home_p, fair_away_p = odds_math.devig_two_way(book_home_p, book_away_p)
                 home_label = f"{home_name} {home_point:+g}"
                 away_label = f"{away_name} {away_point:+g}"
-                candidates.append(_make_leg(matchup, commence, "Spread", home_label, home_price_s, fair_home_p, fair_home_p))
-                candidates.append(_make_leg(matchup, commence, "Spread", away_label, away_price_s, fair_away_p, fair_away_p))
+                candidates.append(_make_leg(matchup, commence, "Spread", home_label, home_price_s, fair_home_p, fair_home_p, team=home_name))
+                candidates.append(_make_leg(matchup, commence, "Spread", away_label, away_price_s, fair_away_p, fair_away_p, team=away_name))
 
         # --- Totals ---
         # NOTE (found in a full model audit, backtested walk-forward against
@@ -288,8 +294,8 @@ def analyze_games(odds_data, model):
                 book_over_p = odds_math.american_to_implied_prob(over_price["american"])
                 book_under_p = odds_math.american_to_implied_prob(under_price["american"])
                 fair_over_p, fair_under_p = odds_math.devig_two_way(book_over_p, book_under_p)
-                candidates.append(_make_leg(matchup, commence, "Total", f"Over {total_line}", over_price, fair_over_p, fair_over_p))
-                candidates.append(_make_leg(matchup, commence, "Total", f"Under {total_line}", under_price, fair_under_p, fair_under_p))
+                candidates.append(_make_leg(matchup, commence, "Total", f"Over {total_line}", over_price, fair_over_p, fair_over_p, side="Over"))
+                candidates.append(_make_leg(matchup, commence, "Total", f"Under {total_line}", under_price, fair_under_p, fair_under_p, side="Under"))
 
     # All game-level legs share one bulk odds fetch, so they share one age --
     # unlike props, which are fetched (and can go stale) one game at a time.
@@ -300,7 +306,13 @@ def analyze_games(odds_data, model):
     return candidates
 
 
-_make_leg = odds_math.make_leg
+def _make_leg(matchup, commence, market, selection, price, model_prob, fair_prob, team=None, side=None):
+    """odds_math.make_leg plus the team/side fields app/correlations.py
+    needs to place a game-level leg relative to the player props around it."""
+    leg = odds_math.make_leg(matchup, commence, market, selection, price, model_prob, fair_prob)
+    leg["team"] = team
+    leg["side"] = side
+    return leg
 
 
 def get_value_bets_and_pool(markets="h2h,spreads,totals", include_props=True, event_filter=None):

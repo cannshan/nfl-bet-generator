@@ -13,8 +13,12 @@ from app import formatting, expert_insight
 
 # Research nudges probability a small, fixed amount rather than trying to be
 # precise -- it's a tiebreaker/confirmation signal on top of the stats model,
-# not a replacement for it.
-SENTIMENT_PROB_NUDGE = {"bullish": 0.03, "bearish": -0.03}
+# not a replacement for it. Was +-3 points back when the stats model itself
+# could swing a leg by 40; now that every prop is anchored on the market
+# (player_props.py) and the model's own tilt is typically 1-3 points, a
+# 3-point sentiment nudge would have been the LARGEST single component of
+# most edges -- for an unvalidated, LLM-summarized signal. Scaled to match.
+SENTIMENT_PROB_NUDGE = {"bullish": 0.01, "bearish": -0.01}
 
 
 def _apply_expert_insight(matchup, props, kickoff_et):

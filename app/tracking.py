@@ -37,6 +37,12 @@ MIN_SAMPLE_FOR_CONFIDENCE = 20  # below this, don't imply the numbers mean much 
 MIN_SAMPLE_FOR_CLV_CONFIDENCE = 200  # sharp-betting convention: CLV needs a bigger sample than raw hit rate to mean much
 
 TABLE = "nfl_predictions"
+# Bumped whenever the probability model changes materially, so the Track
+# Record page can report the CURRENT model's calibration rather than blend
+# it with suggestions an earlier, since-replaced model made. v1 = the
+# original history-only prop model (shown ~75% confidence, hit 37%);
+# v2 = market-anchored props + correlation-adjusted parlays.
+MODEL_VERSION = "v2"
 
 _client = None
 
@@ -348,14 +354,39 @@ def settle_pending():
     return sum(results)
 
 
+def _section_version(section):
+    """'best_odds_parlay' (no suffix) was the original v1 model; later rows
+    carry an explicit '_v2', '_v3', ... suffix."""
+    if not section or "_v" not in section:
+        return "v1"
+    return section.rsplit("_", 1)[1]
+
+
 def get_track_record(stake=5.0):
+    """Calibration/hit-rate/ROI for suggestions made by the CURRENT model
+    version only, plus a separate summary line for any earlier versions --
+    so a model change gets judged on its own record rather than inheriting
+    (or hiding behind) the old one's."""
     try:
-        settled = _sb().table(TABLE).select("*").in_("status", ["hit", "miss"]).execute().data
-        pending_count = len(_sb().table(TABLE).select("id").eq("status", "pending").execute().data)
+        all_settled = _sb().table(TABLE).select("*").in_("status", ["hit", "miss"]).execute().data
+        all_pending = _sb().table(TABLE).select("id,section").eq("status", "pending").execute().data
         void_count = len(_sb().table(TABLE).select("id").eq("status", "void").execute().data)
-        with_clv = _sb().table(TABLE).select("*").not_.is_("closing_decimal_odds", "null").execute().data
+        all_clv = _sb().table(TABLE).select("*").not_.is_("closing_decimal_odds", "null").execute().data
     except Exception:
-        settled, pending_count, void_count, with_clv = [], 0, 0, []
+        all_settled, all_pending, void_count, all_clv = [], [], 0, []
+
+    settled = [r for r in all_settled if _section_version(r.get("section")) == MODEL_VERSION]
+    pending_count = sum(1 for r in all_pending if _section_version(r.get("section")) == MODEL_VERSION)
+    with_clv = [r for r in all_clv if _section_version(r.get("section")) == MODEL_VERSION]
+    older = [r for r in all_settled if _section_version(r.get("section")) != MODEL_VERSION]
+    older_summary = None
+    if older:
+        older_summary = {
+            "n": len(older),
+            "predicted_avg": sum(r["model_prob"] for r in older) / len(older),
+            "actual_hit_rate": sum(1 for r in older if r["status"] == "hit") / len(older),
+            "pending": len(all_pending) - pending_count,
+        }
 
     total = len(settled)
     hits = sum(1 for r in settled if r["status"] == "hit")
@@ -392,6 +423,8 @@ def get_track_record(stake=5.0):
     positive_clv_pct = (sum(1 for r in clv_rows if r["clv_pct"] > 0) / clv_n * 100) if clv_n else None
 
     return {
+        "model_version": MODEL_VERSION,
+        "older_models": older_summary,
         "total_settled": total,
         "pending": pending_count,
         "void": void_count,

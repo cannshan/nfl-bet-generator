@@ -1,34 +1,58 @@
 """Player prop candidates: live sportsbook prop lines (via The Odds API's
-per-event endpoint) matched against each player's own recent-game stat
-distribution (free, from nflverse), adjusted for:
+per-event endpoint), priced by anchoring on the MARKET's own consensus and
+tilting it only slightly toward this app's player-history projection.
 
-- the strength of the opponent's run/pass defense (allowed yardage vs. league average)
-- recent role trend (target share climbing/falling vs. their own baseline)
-- recency (a player's last few games count more than early-season/last-year ones)
-- weather at the stadium (wind/precipitation hurt the passing game; free, no-key)
-- the opponent defense's own fresh injuries (missing starters this week, not
-  already reflected in their season-to-date allowed-yardage numbers)
-- how statistically predictable this stat category tends to be league-wide
-  (a lower-variance category is a more reliable bet at the same edge)
-- coming back from a significant injury (ACL, Achilles, hamstring, etc.) --
-  even once a player is fully cleared ("Active"), a coach often manages their
-  workload down for the first several games back, which a season-average
-  stat line won't reflect. We can't measure "how limited," so we apply a
-  flat, conservative discount rather than pretend precision we don't have.
-- the player's OWN team's starting QB being out -- a backup center-fielding
-  the passing game tends to drag down every pass-catcher's numbers with him,
-  not just the QB's own stats (which are already handled by excluding him
-  from the pool entirely if he's the one who's hurt).
+Why market-anchored (the single most important design decision here): the
+sportsbook line for a player prop is, by a wide margin, the best available
+predictor of that stat. It already reflects everything a public stats feed
+can see (matchups, weather, recency) plus things it can't (depth-chart
+changes, snap-count plans, practice reports, sharp money). A projection
+built from a player's own recent box scores has NO demonstrated edge over
+it -- and this app's own track record proved that the hard way: the first
+19 settled prop suggestions were shown at an average 75% model confidence
+(vs. ~50% market-implied) and hit 37% of the time. Fitting a shrinkage
+weight to those outcomes put the optimal weight on the history model at
+zero. The mechanism was plain to see in the legs themselves: a backup RB
+with a near-zero 2025 game log got "92% Under 7.5 rush yards" while the
+book -- who knew his role had changed -- priced it at 52%.
 
-This is deliberately simpler than the team-game model: we estimate a
-player's expected stat as roughly-normal around their adjusted recent
-average, and compare the resulting probability to the sportsbook's devigged
-price. Small-sample players (fewer than MIN_GAMES_WEIGHT effective games)
-are skipped rather than guessed at.
+So the probability for every leg is now:
+
+  1. a consensus market center for the player's stat, solved from every
+     book's devigged two-sided quote (a book quoting Over 271.5 at 45% is
+     saying the median is a bit under 271.5; every quote is one estimate of
+     the center, and the median across books is the consensus);
+  2. tilted a small, capped amount (MODEL_WEIGHT_VS_MARKET, MAX_MODEL_TILT_SIGMAS)
+     toward the history projection -- enough for genuine, fresh signals
+     (injury-return workload, a backup QB, weather) to nudge the number,
+     never enough to let a stale game log overrule the book;
+  3. priced at the specific line/side being offered, using the player's own
+     historical dispersion (the one thing the game log estimates well).
+
+"Edge" is then model probability minus the BREAKEVEN probability at the
+offered price (1 / decimal odds), i.e. actual expected value after vig --
+so most of the surviving edge is line/price shopping across books, which is
+the one edge a retail bettor reliably has.
+
+The history projection itself still adjusts for the things listed below,
+but note each is a small tilt on top of the market, not the whole answer:
+
+- opponent's run/pass defense (yardage fields only, regressed toward the
+  league average -- a 20% swing off a few games is noise, not signal)
+- recent role trend (target share vs. own baseline)
+- recency (a player's last few games count more than early-season/last-year)
+- weather at the stadium (wind/precipitation hurt the passing game)
+- the opponent defense's fresh injuries
+- coming back from a significant injury (workload-managed early games)
+- the player's own starting QB being out
+
+Small-sample players (fewer than MIN_GAMES_WEIGHT effective games) are
+skipped rather than guessed at.
 """
 import math
 import re
 from concurrent.futures import ThreadPoolExecutor
+from statistics import NormalDist, median
 from app import odds_client, nflverse_client, ratings, odds_math, espn_client, injury_client, weather_client, roster_client
 
 # ESPN's comments are written like news blurbs ("X said Wednesday that...,
@@ -36,6 +60,7 @@ from app import odds_client, nflverse_client, ratings, odds_math, espn_client, i
 # and hard-cap length so notes stay skimmable instead of reading like an article.
 _TRAILING_ATTRIBUTION_RE = re.compile(r",\s*[^,]+ reports?\.?\s*$", re.IGNORECASE)
 COMMENT_MAX_LEN = 140
+_NORMAL = NormalDist()
 
 
 def _simplify_comment(text):
@@ -61,16 +86,33 @@ def _extract_keyword_sentence(text, keywords):
 
 
 MIN_GAMES_WEIGHT = 3.0
-# Median-ish usage split per field, used to pick which calibration table
-# (ratings.PROP_CALIBRATION_*_LOW/HIGH_USAGE) applies -- see the comment
-# above those tables for why low- and high-usage players need separate
-# curves rather than one pooled one.
-USAGE_SPLIT_MEAN = {
-    "passing_yards": 220, "attempts": 30, "completions": 19, "rushing_yards": 25,
-    "receiving_yards": 35, "receptions": 3.0,
-}
-MATCHUP_ADJUSTMENT_CLAMP = (0.75, 1.25)
-ROLE_TREND_CLAMP = (0.8, 1.3)
+
+# How far the final probability moves from the market consensus toward the
+# history projection. 0 = pure market, 1 = pure history model. Fitting this
+# to the app's own settled suggestions (see module docstring) put the
+# optimum at 0; published work on prop markets puts a decent independent
+# model in the 0.05-0.15 range. 0.10 keeps real fresh signals (injury
+# returns, backup QBs, weather) alive as small nudges while making it
+# impossible for a stale game log to manufacture a 40-point "edge." The
+# Track Record page is the arbiter: if bets keep hitting below their shown
+# probability, this should go DOWN, not up.
+MODEL_WEIGHT_VS_MARKET = 0.10
+# Hard cap on that tilt, in units of the player's own game-to-game std --
+# a second guard for the exact failure mode above (a projection several std
+# away from the market is the model missing information, not finding it).
+MAX_MODEL_TILT_SIGMAS = 0.25
+
+# Opponent-defense matchup: applied only to YARDAGE fields (a defense's
+# yards-allowed says something about efficiency against it, nothing about
+# how many times a QB will drop back), and regressed toward league average
+# since a handful of games of yards-allowed is mostly noise. Previously a
+# raw, unshrunk ratio clamped at +-25% was applied to attempts/completions
+# too -- that single factor turned Jared Goff's honest 55% Under 35.5
+# attempts into an 85% "lock" off one game of Buffalo's pass defense.
+MATCHUP_SHRINK = 0.35
+MATCHUP_ADJUSTMENT_CLAMP = (0.90, 1.10)
+YARDAGE_FIELDS = {"passing_yards", "rushing_yards", "receiving_yards"}
+ROLE_TREND_CLAMP = (0.85, 1.15)
 RECENT_GAMES_FOR_TREND = 3
 RECENCY_DECAY_PER_WEEK = 0.90  # within the current season, each week further back counts ~10% less
 # Log-scale std, fit walk-forward against ~31,000 real player-games
@@ -156,15 +198,10 @@ def _weighted_mean_std_log(rows_with_weight, field):
     projection): the raw-normal model put only 37-41% of actual outcomes
     above its own projected mean (should be ~50% if the shape is right, not
     just the average); the log-transformed version corrected that to
-    50-52%. An earlier, single-example check of this fix looked alarmingly
-    overconfident (93% on one leg) and got reverted -- but that was one
-    anecdote, not a verdict. At full scale, the log model's dispersion was
-    only mildly tight (65% within +-1 std vs an ideal 68%), fixed here via
-    LOG_STD_CALIBRATION rather than by abandoning the fix. Passing and
-    rushing yards did NOT show the same bias under this transform (still
-    35-37% above mean, a different-shaped skew, likely game-script driven)
-    -- so this is only used for RECEIVING_FIELDS, not applied blanket to
-    every category."""
+    50-52%. Passing and rushing yards did NOT show the same bias under this
+    transform (still 35-37% above mean, a different-shaped skew, likely
+    game-script driven) -- so this is only used for RECEIVING_FIELDS, not
+    applied blanket to every category."""
     values, weights = [], []
     for row, w in rows_with_weight:
         try:
@@ -302,15 +339,25 @@ def _defensive_injury_bonus_by_team(player_index, injuries, current_rosters):
     return {team: 1 + min(MAX_DEFENSIVE_INJURY_BONUS, n * PER_MISSING_DEFENDER_BONUS) for team, n in counts.items()}
 
 
-def _consolidate_best_prices(event_odds):
-    """Collapse all bookmakers down to the single best (highest decimal) price
-    per (market, player, point, side), so shopping across books doesn't
-    produce duplicate near-identical legs."""
+def _collect_market(event_odds):
+    """Two views of the same prop board:
+
+    best_prices: {(market, player, point, side): best price across books}
+      -- the price a leg is actually offered at (shop every book).
+    quotes: {(market, player): [(point, devigged_p_over), ...]}
+      -- one entry per book that posts BOTH sides at a point, devigged
+      within that single book. This is what the market consensus is built
+      from. Devigging the best Over from one book against the best Under
+      from another (what an earlier version did) mixes two books' opinions
+      and understates the vig, so it's never done here."""
     best = {}
+    quotes = {}
     for bm in event_odds.get("bookmakers", []):
         for market in bm.get("markets", []):
-            if market.get("key") not in MARKET_CONFIG:
+            mkey = market.get("key")
+            if mkey not in MARKET_CONFIG:
                 continue
+            per_point = {}
             for outcome in market.get("outcomes", []):
                 player = outcome.get("description")
                 point = outcome.get("point")
@@ -318,10 +365,41 @@ def _consolidate_best_prices(event_odds):
                 if not player or point is None or side not in ("Over", "Under"):
                     continue
                 dec = odds_math.american_to_decimal(outcome["price"])
-                key = (market["key"], player, point, side)
+                key = (mkey, player, point, side)
                 if key not in best or dec > best[key]["decimal"]:
                     best[key] = {"american": outcome["price"], "decimal": dec, "bookmaker": bm.get("title")}
-    return best
+                per_point.setdefault((player, point), {})[side] = outcome["price"]
+            for (player, point), sides in per_point.items():
+                if "Over" in sides and "Under" in sides:
+                    p_over, _p_under = odds_math.devig_two_way(
+                        odds_math.american_to_implied_prob(sides["Over"]),
+                        odds_math.american_to_implied_prob(sides["Under"]),
+                    )
+                    quotes.setdefault((mkey, player), []).append((point, p_over))
+    return best, quotes
+
+
+def _market_center(quotes, sigma, log_space):
+    """Consensus center of the market's distribution for one player-stat,
+    solved from every book's devigged quote. A book quoting P(Over point) =
+    p is saying the center sits at point + sigma * z(p) (in log space for
+    the receiving fields); the median across all quotes is the consensus.
+    Quotes right at 50% pin the center exactly; off-center quotes are
+    translated using the player's own historical dispersion."""
+    centers = []
+    for point, p_over in quotes:
+        p_over = min(max(p_over, 0.02), 0.98)
+        z = _NORMAL.inv_cdf(p_over)
+        if log_space:
+            centers.append(math.log(point + 1) + sigma * z)
+        else:
+            centers.append(point + sigma * z)
+    return median(centers) if centers else None
+
+
+def _prob_under(point, center, sigma, log_space):
+    x = math.log(point + 1) if log_space else point
+    return ratings.normal_cdf((x - center) / sigma)
 
 
 def _fetch_event_odds_and_weather(event, markets):
@@ -406,16 +484,19 @@ def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None, event_f
         matchup = f"{away} @ {home}"
         commence = event_odds.get("commence_time")
 
-        best_prices = _consolidate_best_prices(event_odds)
-        pairs = {}
+        best_prices, quotes = _collect_market(event_odds)
+        offers = {}
         for (mkey, player, point, side), price in best_prices.items():
-            pairs.setdefault((mkey, player, point), {})[side] = price
+            offers.setdefault((mkey, player), {})[(point, side)] = price
 
-        for (mkey, player, point), sides in pairs.items():
+        for (mkey, player), sides_by_point in offers.items():
             field, label, category = MARKET_CONFIG[mkey]
             raw_rows = player_index.get(player)
             if not raw_rows:
                 continue
+            player_quotes = quotes.get((mkey, player))
+            if not player_quotes:
+                continue  # no book posts both sides -> no way to know the market's real opinion
 
             injury = injuries.get(player)
             if injury and injury["status"] in injury_client.EXCLUDE_STATUSES:
@@ -424,18 +505,17 @@ def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None, event_f
                 continue
 
             rows = _apply_recency(raw_rows)
-            mean, std = _weighted_mean_std(rows, field)
-            if mean is None:
-                continue
-            std = max(std, mean * 0.2, 1.0)  # floor: avoid overconfident small-sample variance
-            base_mean = mean  # captured before any adjustment factor, for the log-space branch below
-
-            if injury and injury["status"] == "Questionable":
-                mean *= injury_client.QUESTIONABLE_DISCOUNT
-
-            return_risk = _mentions_major_injury_return(injury)
-            if return_risk:
-                mean *= MAJOR_INJURY_RETURN_DISCOUNT[category]
+            log_space = field in RECEIVING_FIELDS
+            if log_space:
+                mean, std = _weighted_mean_std_log(rows, field)
+                if mean is None or not std:
+                    continue
+                sigma = std
+            else:
+                mean, std = _weighted_mean_std(rows, field)
+                if mean is None:
+                    continue
+                sigma = max(std, mean * 0.2, 1.0)  # floor: avoid overconfident small-sample variance
 
             # Prefer the current-roster team over the stat row's own 'team'
             # field: that field only reflects games actually played, so a
@@ -446,66 +526,49 @@ def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None, event_f
             )
             if player_team_full not in (home, away):
                 # Extra safety net for the rare case a prop feed genuinely
-                # lists a player under the wrong event. Note this used to
-                # trigger on legitimate trades too (e.g. a receiver who moved
-                # teams) back when it only checked nflverse's stale
-                # last-played-team field -- current_rosters above fixes that
-                # for the common case, so this should now only catch real
-                # feed errors.
+                # lists a player under the wrong event.
                 continue
             opponent_full = away if player_team_full == home else home
 
-            adjusted_mean = mean
-            if opponent_full and opponent_full in allowed and league_avg.get(category):
-                factor = allowed[opponent_full][category] / league_avg[category]
-                factor = max(MATCHUP_ADJUSTMENT_CLAMP[0], min(MATCHUP_ADJUSTMENT_CLAMP[1], factor))
-                adjusted_mean *= factor
+            # --- history projection: every adjustment is a multiplicative
+            # factor on the projected stat, collected into one total_factor
+            # (applied as an additive log shift for the log-space fields).
+            total_factor = 1.0
+            if injury and injury["status"] == "Questionable":
+                total_factor *= injury_client.QUESTIONABLE_DISCOUNT
 
-            if field in RECEIVING_FIELDS:
-                adjusted_mean *= _role_trend_factor(rows)
+            return_risk = _mentions_major_injury_return(injury)
+            if return_risk:
+                total_factor *= MAJOR_INJURY_RETURN_DISCOUNT[category]
+
+            matchup_factor = 1.0
+            if field in YARDAGE_FIELDS and opponent_full in allowed and league_avg.get(category):
+                raw_ratio = allowed[opponent_full][category] / league_avg[category]
+                matchup_factor = 1 + MATCHUP_SHRINK * (raw_ratio - 1)
+                matchup_factor = max(MATCHUP_ADJUSTMENT_CLAMP[0], min(MATCHUP_ADJUSTMENT_CLAMP[1], matchup_factor))
+            total_factor *= matchup_factor
+
+            if log_space:
+                total_factor *= _role_trend_factor(rows)
                 if player_team_full in qb_out_teams:
-                    adjusted_mean *= QB_OUT_RECEIVING_DISCOUNT
+                    total_factor *= QB_OUT_RECEIVING_DISCOUNT
 
             if opponent_full and defensive_bonus.get(opponent_full):
-                adjusted_mean *= defensive_bonus[opponent_full]
+                total_factor *= defensive_bonus[opponent_full]
 
             if weather:
-                adjusted_mean *= weather_client.adjustment_factor(weather, category)
+                total_factor *= weather_client.adjustment_factor(weather, category)
 
-            log_mean, log_std = (
-                _weighted_mean_std_log(rows, field) if field in RECEIVING_FIELDS else (None, None)
-            )
-            usage_split = USAGE_SPLIT_MEAN.get(field)
-            is_low_usage = usage_split is not None and base_mean < usage_split
-            if log_mean is not None and log_std:
-                # Translate the combined multiplicative adjustment (matchup,
-                # role trend, QB-out, defensive injuries, weather) into an
-                # additive shift in log-space, so none of that adjustment
-                # logic needs to be duplicated for the log-scale model --
-                # multiplying the raw projection by `total_factor` is
-                # equivalent to shifting its log by log(total_factor).
-                total_factor = max(adjusted_mean / base_mean, 0.01) if base_mean > 0 else 1.0
-                adjusted_log_mean = log_mean + math.log(total_factor)
-                p_under = ratings.normal_cdf((math.log(point + 1) - adjusted_log_mean) / log_std)
-                log_table = ratings.PROP_CALIBRATION_LOG_LOW_USAGE if is_low_usage else ratings.PROP_CALIBRATION_LOG_HIGH_USAGE
-                p_under = ratings.calibrate_prop_prob(p_under, log_table)
-            else:
-                p_under = ratings.normal_cdf((point - adjusted_mean) / std)
-                # Only fields actually included in the calibration backtest
-                # (USAGE_SPLIT_MEAN) get corrected -- passing_tds wasn't
-                # tested (too low/discrete a distribution for the same
-                # normal-approximation backtest) and stays uncalibrated
-                # rather than forced through a curve fit on different data.
-                if usage_split is not None:
-                    raw_table = ratings.PROP_CALIBRATION_RAW_LOW_USAGE if is_low_usage else ratings.PROP_CALIBRATION_RAW_HIGH_USAGE
-                    p_under = ratings.calibrate_prop_prob(p_under, raw_table)
-            p_over = 1 - p_under
+            total_factor = max(total_factor, 0.01)
+            model_center = mean + math.log(total_factor) if log_space else mean * total_factor
 
-            over_price, under_price = sides.get("Over"), sides.get("Under")
-            book_over_p = odds_math.american_to_implied_prob(over_price["american"]) if over_price else None
-            book_under_p = odds_math.american_to_implied_prob(under_price["american"]) if under_price else None
-            if book_over_p is not None and book_under_p is not None:
-                book_over_p, book_under_p = odds_math.devig_two_way(book_over_p, book_under_p)
+            # --- market consensus, then the small capped tilt toward the model.
+            market_center = _market_center(player_quotes, sigma, log_space)
+            if market_center is None:
+                continue
+            tilt = MODEL_WEIGHT_VS_MARKET * (model_center - market_center)
+            tilt = max(-MAX_MODEL_TILT_SIGMAS * sigma, min(MAX_MODEL_TILT_SIGMAS * sigma, tilt))
+            blended_center = market_center + tilt
 
             injury_note, injury_flag = None, None
             if injury and injury["status"] == "Questionable":
@@ -525,7 +588,7 @@ def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None, event_f
             # Only worth flagging once it's a real outlier -- in week 1, every
             # player has zero current-season games by definition, so the note
             # would be true for the whole pool and tell you nothing.
-            stale_data_note = "No 2026 games yet" if no_current_season_data and week and week > 1 else None
+            stale_data_note = f"No {season} games yet" if no_current_season_data and week and week > 1 else None
 
             return_risk_note = (
                 f"Coming back from injury: {round((1 - MAJOR_INJURY_RETURN_DISCOUNT[category]) * 100)}% "
@@ -544,28 +607,38 @@ def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None, event_f
             qb_out_note = (
                 f"{player_team_full}'s starting QB is out — receiving projection discounted "
                 f"{round((1 - QB_OUT_RECEIVING_DISCOUNT) * 100)}% for a backup under center."
-                if field in RECEIVING_FIELDS and player_team_full in qb_out_teams else None
+                if log_space and player_team_full in qb_out_teams else None
             )
 
+            # Shown on the leg so the disagreement is visible, never hidden:
+            # what the player's game log alone would project vs. what the
+            # market consensus says, both as the stat itself.
+            model_median = round(math.exp(model_center) - 1, 1) if log_space else round(model_center, 1)
+            market_median = round(math.exp(market_center) - 1, 1) if log_space else round(market_center, 1)
+
             common = dict(
-                player=player, stat_category=mkey, stat_label=label,
-                line=point, injury_note=injury_note, injury_flag=injury_flag,
+                player=player, team=player_team_full, stat_category=mkey, stat_label=label,
+                stat_field=field,
+                injury_note=injury_note, injury_flag=injury_flag,
                 stale_data_note=stale_data_note, weather_note=weather_note, qb_out_note=qb_out_note,
                 return_risk_note=return_risk_note,
                 category_cv=reliability.get(field, 0.5),
                 odds_age_seconds=odds_age,
+                model_median=model_median, market_median=market_median,
             )
-
             market_label = f"Player Prop: {label}"
-            if over_price and book_over_p is not None:
-                selection = f"{player} Over {point} {label}"
-                leg = odds_math.make_leg(matchup, commence, market_label, selection, over_price, p_over, book_over_p)
-                leg.update(common, side="Over")
-                candidates.append(leg)
-            if under_price and book_under_p is not None:
-                selection = f"{player} Under {point} {label}"
-                leg = odds_math.make_leg(matchup, commence, market_label, selection, under_price, p_under, book_under_p)
-                leg.update(common, side="Under")
+
+            for (point, side), price in sides_by_point.items():
+                p_under_model = _prob_under(point, blended_center, sigma, log_space)
+                p_under_market = _prob_under(point, market_center, sigma, log_space)
+                p_under_history = _prob_under(point, model_center, sigma, log_space)
+                if side == "Under":
+                    p_model, p_market, p_history = p_under_model, p_under_market, p_under_history
+                else:
+                    p_model, p_market, p_history = 1 - p_under_model, 1 - p_under_market, 1 - p_under_history
+                selection = f"{player} {side} {point} {label}"
+                leg = odds_math.make_leg(matchup, commence, market_label, selection, price, p_model, p_market)
+                leg.update(common, side=side, line=point, history_prob=round(p_history, 4))
                 candidates.append(leg)
 
     return candidates

@@ -4,8 +4,11 @@
     {
       "name": "nfl-bet-generator",
       "runtimeExecutable": ".venv/Scripts/python.exe",
-      "runtimeArgs": ["run.py"],
-      "port": 5057
+      "runtimeArgs": [
+        "run.py"
+      ],
+      "port": 5057,
+      "autoPort": true
     }
   ]
 }

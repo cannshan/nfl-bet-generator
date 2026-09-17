@@ -44,7 +44,7 @@ def _record_suggestions(best_odds_parlays, season, week):
     parlay is independent of every other, so they run concurrently rather
     than one at a time (this used to be a real chunk of page load time with
     a full slate of games)."""
-    calls = [(parlay["legs"], "best_odds_parlay") for parlay in best_odds_parlays]
+    calls = [(parlay["legs"], f"best_odds_parlay_{tracking.MODEL_VERSION}") for parlay in best_odds_parlays]
     if not calls:
         return
 
@@ -255,9 +255,20 @@ def refresh_settlements():
 
 def _leg_signature(d):
     """Identifies 'the same underlying bet' for exclude/dedup purposes: a
-    player prop is keyed by (player, stat category) regardless of line/side,
-    a game-level bet by its market -- a matchup only has one live
-    spread/total/moneyline market at a time, so that's specific enough."""
+    player prop is keyed by PLAYER regardless of stat/line/side (a player's
+    different stats are one correlated bet, and a parlay never holds two
+    legs on the same player), a game-level bet by its market -- a matchup
+    only has one live spread/total/moneyline market at a time, so that's
+    specific enough."""
+    player = d.get("player")
+    if player:
+        return ("prop", player)
+    return ("game", d.get("market"))
+
+
+def _exact_signature(d):
+    """The specific bet being replaced -- player + stat, so a redo can still
+    offer the same player's OTHER stat as the swap-in."""
     player = d.get("player")
     if player:
         return ("prop", player, d.get("stat_category"))
@@ -294,7 +305,7 @@ def redo_leg():
 
     game_legs = [l for l in pool if l["matchup"] == matchup]
     excluded = {_leg_signature(e) for e in exclude}
-    excluded.add(_leg_signature(current))
+    excluded_exact = {_exact_signature(current)}
 
     player = current.get("player")
     if player:
@@ -314,7 +325,10 @@ def redo_leg():
 
     candidate = None
     for group in search_order:
-        options = [l for l in group if _leg_signature(l) not in excluded]
+        options = [
+            l for l in group
+            if _leg_signature(l) not in excluded and _exact_signature(l) not in excluded_exact
+        ]
         if options:
             candidate = max(options, key=score)
             break
@@ -325,6 +339,36 @@ def redo_leg():
     template = app.jinja_env.get_template("_leg.html")
     html = template.module.render_leg(candidate, show_matchup=show_matchup)
     return jsonify({"leg": candidate, "html": str(html)})
+
+
+@app.route("/api/parlay-stats", methods=["POST"])
+def parlay_stats():
+    """Recomputes a card's payout / combined probability / EV after the
+    client swaps a leg. Done server-side because the combined probability
+    is correlation-adjusted (app/correlations.py) -- it is not the naive
+    product of the legs' probabilities, so the browser can't just multiply.
+    The client sends each leg's identifying fields straight from the leg's
+    data-* attributes."""
+    data = request.get_json(silent=True) or {}
+    legs = data.get("legs") or []
+    try:
+        stake = float(data.get("stake") or DEFAULT_STAKE)
+        for leg in legs:
+            leg["decimal_odds"] = float(leg["decimal_odds"])
+            leg["model_prob"] = float(leg["model_prob"])
+    except (TypeError, ValueError, KeyError):
+        return jsonify({"error": "Bad leg data."}), 400
+    if len(legs) < 1:
+        return jsonify({"error": "No legs."}), 400
+    result = parlay_builder.build_result(legs, stake)
+    return jsonify({
+        "payout": result["payout"],
+        "american_equivalent": result["american_equivalent"],
+        "combined_prob": result["combined_prob"],
+        "breakeven_prob": result["breakeven_prob"],
+        "ev_pct": result["ev_pct"],
+        "has_same_game_legs": result["has_same_game_legs"],
+    })
 
 
 if __name__ == "__main__":

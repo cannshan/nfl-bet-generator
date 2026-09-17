@@ -38,6 +38,17 @@
     </div>
   </section>
 
+  <p class="meta">
+    These numbers cover suggestions made by the current probability model ({{ record.model_version }}:
+    player props anchored on the sportsbooks' consensus, parlay hit chances correlation-adjusted).
+    {% if record.older_models %}
+    An earlier model ({{ record.older_models.n }} settled bets, avg. predicted
+    {{ (record.older_models.predicted_avg * 100)|round(1) }}%, actually hit
+    {{ (record.older_models.actual_hit_rate * 100)|round(1) }}%{% if record.older_models.pending %},
+    {{ record.older_models.pending }} still pending{% endif %}) is excluded here — that gap is exactly why it was replaced.
+    {% endif %}
+  </p>
+
   {% if not record.confident %}
     <p class="meta">
       ⚠️ Only {{ record.total_settled }} bets settled so far — way too small a sample to mean

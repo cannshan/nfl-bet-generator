@@ -1,21 +1,19 @@
 # NFL Bet Generator
 
 A local web dashboard that pulls **live NFL odds** and **real season stats**,
-runs a transparent statistical model to estimate "fair" win/cover/total
-probabilities, and builds two kinds of parlay aimed at a target payout
-(default: $5 → $1000):
+prices every bet by anchoring on the sportsbooks' own consensus and tilting
+it a small, validated amount toward a transparent statistical model, and
+builds a parlay aimed at a target payout (default: $5 → $1000):
 
-- **Same Game Parlays** — one per matchup that has player props live, mostly
-  built from that game's props. Legs here are correlated (a team winning big
-  moves its players' stats with it), so the payout/hit-chance shown is
-  illustrative, not a real sportsbook quote — build the actual combo in your
-  sportsbook's own SGP tool for the real price.
 - **Statistically Best Bets** — no restriction on which games a leg comes
-  from; it just chases the highest real hit chance at the target payout using
-  every signal the model has. When that happens to include more than one leg
-  from the same game, the combo is flagged (`has_same_game_legs`) and its
-  probability carries the same illustrative caveat as a Same Game Parlay —
-  never silently presented as clean independent math when it isn't.
+  from; it chases the highest honest hit chance at the target payout. Every
+  card shows the correlation-adjusted chance the whole ticket hits, the
+  fair (breakeven) chance for that payout, and the resulting expected value.
+  Same-game legs are allowed, and their real correlation (measured from
+  2018-2025 outcomes, see `scripts/backtest_correlations.py`) is built into
+  that hit chance rather than waved away — though note a sportsbook will
+  still reprice such a ticket in its own Same Game Parlay builder rather
+  than honor the product of the individual prices.
 
 A **Track Record** tab tracks every suggestion automatically and checks it
 against the real result once the game is played — see below.
@@ -42,13 +40,34 @@ against the real result once the game is played — see below.
 - **Team model**: an opponent-adjusted power rating (similar in spirit to a
   Massey rating) computed from real scoring margins, blended with nflverse's
   EPA-based team efficiency ratings, converted to win/cover/total
-  probabilities via a normal-distribution margin model.
-- **Player prop model**: each player's own weighted recent-game average and
-  standard deviation for the relevant stat (now including pass attempts,
-  completions, and pass TDs, not just yardage — see "which prop type is more
-  predictable" below), adjusted for several things at once:
-  - **opponent matchup** — how generous/stingy the opponent's run or pass
-    defense has been vs. league average
+  probabilities via a normal-distribution margin model. **It does not beat
+  the market, and the app doesn't pretend it does**: backtested walk-forward
+  over 2,118 games against real closing moneylines (2018-2025,
+  `scripts/backtest_moneyline.py`), the best weight to put on it vs. the
+  devigged market price was zero — in the games where it disagreed with the
+  market by 15+ points, the market was right, and betting its picks lost
+  7.6% at closing prices. Spreads and totals had already failed the same
+  test. So every game-level market is priced at the devigged market
+  probability (edge ≈ the vig, i.e. slightly negative), and the rating model
+  is kept only as a diagnostic and a tunable tilt currently set to 0.
+- **Player prop model — market first, game log second**: the sportsbook
+  line is by far the best available predictor of a player's stat (it already
+  reflects everything a public stats feed can see, plus depth-chart plans,
+  practice reports and sharp money that it can't). So every prop is priced
+  from a **consensus market center** solved from every book's devigged
+  two-sided quote (a book quoting Over 271.5 at 45% is saying the median
+  sits a bit under 271.5; the median across books is the consensus), then
+  tilted 10% of the way toward this app's own game-log projection, capped at
+  a quarter of the player's game-to-game standard deviation. That weight was
+  fit, not chosen: the app's first 19 settled prop suggestions were shown at
+  an average 75% confidence and hit 37% of the time, and the log-loss-
+  minimizing weight on the pure game-log model against those outcomes was
+  zero. The game-log projection (each player's own weighted recent-game
+  average and dispersion) still supplies the small tilt and the shape of the
+  distribution, adjusted for:
+  - **opponent matchup** — yardage props only, regressed 65% toward league
+    average and capped at ±10%: a few games of yards-allowed is mostly
+    noise, and it says nothing about how many times a QB will drop back
   - **recency** — within the current season, each week further back counts
     ~10% less, so a real recent trend outweighs an early-season game
   - **role trend** — a receiver's target share over their last 3 games vs.
@@ -80,10 +99,12 @@ against the real result once the game is played — see below.
   discounts a prop's edge when ranking which legs make a card, so two props
   with similar edge but different volatility don't get treated as equally
   good bets.
-- **Edge**: for each bet, we de-vig the sportsbook's two-sided price to get
-  its true implied probability, then compare to the model's probability. A
-  positive edge means the model thinks the bet is priced better than the
-  market says.
+- **Edge**: model probability minus the **breakeven** probability at the
+  price actually offered (1 / decimal odds) — i.e. expected value after the
+  book's vig. Most of the edge that survives market anchoring is line/price
+  shopping across books, which is the one edge a retail bettor reliably has.
+  Each leg shows its chance to hit, its breakeven, and where the market
+  consensus puts the stat vs. where the player's game log alone would.
 - **Live injury reports**: ESPN's public injuries endpoint (one call for the
   whole league, including beat-reporter comments on practice participation —
   the "sore at practice but expected to play" kind of nuance) is checked on
@@ -128,7 +149,7 @@ against the real result once the game is played — see below.
   web search tool to find current betting-expert commentary, projections, and
   buzz on every candidate player in that game — before the card is finalized,
   not after. A bullish/bearish read nudges that leg's probability by a small,
-  fixed amount (±3pp), which can genuinely change which legs make the card,
+  fixed amount (±1pp), which can genuinely change which legs make the card,
   not just decorate whatever the stats model already picked. This is the one
   part of the app with a real per-use cost (roughly a few cents per game per
   refresh, cached for 4 hours) — uncheck "Include expert insight" to skip it,
@@ -184,25 +205,21 @@ against the real result once the game is played — see below.
   affected the same way) — this is exactly the "don't trust his workload yet"
   instinct made concrete, applied to the number itself rather than left as
   a comment nobody has to act on.
-- **Same Game Parlays**: for each matchup with live props, searches
-  combinations of that game's own legs — player props dominate the candidate
-  pool, with the moneyline added only when it's a strong pick on its own —
-  for the payout landing closest to your target, ranked by the highest hit
-  probability achievable at that payout level. A team's own spread is
-  excluded when its moneyline is already in the combo, since covering a
-  spread and winning outright are nearly the same bet. Games without live
-  props yet fall back to a smaller spread/total combo, shown separately.
-- **Statistically Best Bets**: the same target-payout search, unrestricted —
-  run on the whole week's pool with no per-game limit, ranked by edge
-  discounted for category reliability. Two dedupe passes keep this honest:
-  `dedupe_best_per_bet` collapses every book's different line for the same
-  player+stat down to the single best one (otherwise the search could stack
-  "Over 39.5," "Over 44.5," and "Over 49.5" rushing yards for the same player
-  as if they were three independent bets, which they obviously aren't), and
-  `_drop_redundant_favorite_bets` keeps only the better of a team's own
-  spread vs. their moneyline when both would otherwise appear together. When
-  the result still includes more than one leg from the same game, it's
-  flagged rather than presented as if the math were clean.
+- **Statistically Best Bets**: a target-payout search over the whole week's
+  pool, ranked by edge discounted for category reliability. It never puts
+  two legs on the same player in one ticket (a QB's attempts, completions
+  and passing yards are ~0.6-0.7 correlated in real outcomes — one bet in
+  three disguises), and keeps only the better of a team's own spread vs.
+  their moneyline. For legs from the same game that DO survive, the combined
+  hit chance comes from a Gaussian copula over correlations measured from
+  every 2018-2025 player-game against real closing lines
+  (`app/correlation_table.json`, e.g. a QB's passing yards vs. his own
+  receivers' yards +0.25, vs. the game total +0.30, vs. his team's margin
+  +0.06; a RB's rushing yards vs. his team's margin +0.20) — not the naive
+  product. The search only accepts a ticket near the target if its hit
+  chance is at least half the fair chance for that payout; otherwise it
+  widens the payout band rather than hand you a lottery ticket priced worse
+  than a lottery ticket.
 
 ## Setup
 
@@ -264,10 +281,12 @@ to $5 stake, $1000 payout).
   produce a bad projection.
 - **The role-trend, weather, and defensive-injury adjustments are all rough,
   transparent heuristics with clamped magnitudes** (e.g. role trend is capped
-  at ±30%, defensive-injury boost at +15% total), not fitted models — they're
+  at ±15%, defensive-injury boost at +15% total), not fitted models — they're
   there to catch real, directionally-correct signal without pretending to
-  precision the data doesn't support. Same goes for the ±3pp expert-sentiment
-  nudge: a fixed amount, not a calibrated probability shift.
+  precision the data doesn't support. Same goes for the ±1pp expert-sentiment
+  nudge: a fixed amount, not a calibrated probability shift. All of them
+  together only move a prop's probability by the 10% model tilt described
+  above, so none can overrule the market on its own.
 - **What injury data can't do**: player-vs-player coverage matchups (which
   specific cornerback shadows which receiver, and how that corner performs
   against that receiver's profile) aren't available from any free source —
@@ -284,15 +303,19 @@ to $5 stake, $1000 payout).
   The rest of this app's numbers come from deterministic math over structured
   data; this one section is the exception, and the UI/README say so on
   purpose rather than presenting it with false uniformity.
-- **Same-game legs are correlated, and the tool doesn't pretend otherwise.**
-  A team winning big tends to move its players' stat lines with it, so
-  multiplying independent probabilities together (what the payout/hit-chance
-  shown does) overstates precision for a same-game combo. It's a reference
-  number; the real, correlation-adjusted price only exists in your
-  sportsbook's own Same Game Parlay builder once you enter the same legs
-  there. A payout close to your target also inherently means a lower hit
-  chance than a smaller payout would — the tool always shows that real
-  number rather than a rosier one.
+- **Same-game legs are correlated, and the hit chance accounts for it —
+  but the payout shown doesn't.** The combined odds on a card are the
+  product of the individual prices; a sportsbook's Same Game Parlay builder
+  will quote something lower for correlated legs. The correlation-adjusted
+  hit chance and EV shown are honest for the price shown; enter the same
+  legs in your book's SGP tool for the real price. A payout close to your
+  target also inherently means a lower hit chance than a smaller payout
+  would — the tool always shows that real number rather than a rosier one.
+- **Backtests live in `scripts/`** and are re-runnable: `backtest_correlations.py`
+  (same-game correlation table) and `backtest_moneyline.py` (does the team
+  model beat the closing moneyline, and what market weight that justifies).
+  The Track Record tab is the ongoing version of the same question for the
+  live model, reported per model version so a change is judged on its own.
 
 ## Responsible gambling
 

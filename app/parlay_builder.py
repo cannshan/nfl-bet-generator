@@ -1,80 +1,53 @@
 """Reusable combo-search core: given a pool of candidate legs, search
 combinations for a payout near a target, ranked by the highest combined
 hit probability achievable at that payout level. Starts with a tight band
-around the target and widens it, but only actually prefers a wider band's
-combo when it's a meaningfully better bet (see PROB_IMPROVEMENT_FACTOR) --
-hitting the exact target payout is never allowed to force a near-zero-
-probability combo when a somewhat-lower-payout, much-more-likely one exists.
+around the target and widens it only when the target band can't produce
+anything better than a hopeless lottery ticket (see MIN_PROB_VS_FAIR).
 
-This is deliberately leg-pool-agnostic -- see game_cards.py, which calls it
-per matchup with that game's own legs (mostly player props). Multiplying
-probabilities together is only a strictly fair calculation when legs are
-independent; for same-game legs that's a modeling simplification made
-explicit to the user (see the disclaimer in index.html), not something this
-module pretends is exact.
+Combined probability is NOT the naive product of the legs' probabilities:
+same-game legs are correlated, and app/correlations.py turns per-leg
+probabilities into a joint probability using correlations measured from
+real outcomes (2018-2025). Legs from different games are independent and
+multiply as usual. A parlay also never contains two legs on the same
+player (a QB's attempts, completions and passing yards are one bet in
+three disguises), or a team's spread alongside its own moneyline.
 """
 import itertools
-from app import odds_math, formatting
+from app import odds_math, formatting, correlations
 
 MAX_LEGS_SEARCHED = 8
 CROSS_GAME_CANDIDATE_POOL_SIZE = 14
-# Backtested against 3,089 real (QB, game) observations, 2018-2025,
-# walk-forward: a QB beating their own projected passing yards and that
-# SAME GAME's total beating its real closing line are positively
-# correlated in reality (a big passing day usually means more total
-# points) -- the naive independence multiplication combo_stats() otherwise
-# uses understates the true joint probability by ~23-26% when both go the
-# same direction (both Over or both Under), and overstates it by ~23-26%
-# when they go opposite directions. This is the one same-game correlation
-# actually measured and corrected here; other same-game pairs (e.g. two
-# receivers on the same team) remain treated as independent -- not because
-# they're assumed uncorrelated, but because they haven't been backtested.
-QB_PASS_TOTAL_SAME_DIRECTION_LIFT = 1.24
-QB_PASS_TOTAL_OPPOSITE_DIRECTION_LIFT = 0.76
-# Below this combined probability, a combo is treated as too much of a
-# lottery ticket to settle for -- the search widens the payout tolerance
-# band (accepting a lower payout) until it finds something that clears this
-# floor, or runs out of tolerance bands to try. This intentionally lets the
-# target payout matter as much as possible: a well-priced target is met
-# almost exactly, and only a truly ambitious one (e.g. 200x on a $5 stake,
-# which realistically needs 7-8 legs and multiplies down to ~1-2%) gets
-# pulled down toward a more sane probability instead of chasing the exact
-# number off a cliff. An earlier version of this logic (always jumping to
-# whichever wider band was "meaningfully more likely") overcorrected: it
-# kept finding a safer option at every single step and ended up ignoring
-# the target payout almost entirely, collapsing every search down near the
-# cheapest, safest combo regardless of what was actually requested.
-MIN_ACCEPTABLE_PROB = 0.10
+# A combo landing near the target payout is only accepted if its hit
+# probability is at least this fraction of the FAIR probability for that
+# payout (stake / payout -- the probability at which the bet breaks even).
+# A $5 -> $1000 ticket is fair at 0.5%; anything below 0.25% is a worse
+# deal than the payout justifies, so the search widens the payout band
+# (accepting a lower payout) until it finds something that clears the bar.
+# Scaling the floor to the target -- rather than a fixed 10% -- is what lets
+# an ambitious target actually be met: with honest probabilities a 200x
+# parlay is never going to be a 10% shot, and a fixed floor would quietly
+# collapse every search down to a cheap 3-legger regardless of the target.
+MIN_PROB_VS_FAIR = 0.5
 
 
-def _qb_pass_total_correlation(combo):
-    """See QB_PASS_TOTAL_*_LIFT above. Applies once per (QB passing leg,
-    same-game Total leg) pair found in the combo -- there's normally at
-    most one of each per game, so this rarely compounds more than once."""
-    factor = 1.0
-    qb_legs = [l for l in combo if l.get("stat_category") == "player_pass_yds"]
-    total_legs = [l for l in combo if l["market"] == "Total"]
-    for qb_leg in qb_legs:
-        for total_leg in total_legs:
-            if qb_leg["matchup"] != total_leg["matchup"]:
-                continue
-            same_direction = (qb_leg["side"] == "Over") == total_leg["selection"].startswith("Over")
-            factor *= QB_PASS_TOTAL_SAME_DIRECTION_LIFT if same_direction else QB_PASS_TOTAL_OPPOSITE_DIRECTION_LIFT
-    return factor
-
-
-def combo_stats(combo, stake):
+def combo_stats(combo, stake, pair_lifts=None):
     dec_odds = odds_math.parlay_decimal_odds([leg["decimal_odds"] for leg in combo])
     payout = odds_math.payout_for_stake(dec_odds, stake)
-    combined_prob = 1.0
-    for leg in combo:
-        combined_prob *= leg["model_prob"]
-    combined_prob = min(combined_prob * _qb_pass_total_correlation(combo), 1.0)
+    combined_prob = correlations.joint_probability(combo, pair_lifts=pair_lifts)
     return dec_odds, payout, combined_prob
 
 
-def _build_result(combo, stake):
-    dec_odds, payout, combined_prob = combo_stats(combo, stake)
+def build_result(combo, stake):
+    """Full result for display: the joint probability here comes from the
+    exact (Monte Carlo) copula evaluation rather than the pairwise
+    approximation the search ranks with, plus the fair/breakeven
+    probability for the payout and the resulting expected value."""
+    dec_odds = odds_math.parlay_decimal_odds([leg["decimal_odds"] for leg in combo])
+    payout = odds_math.payout_for_stake(dec_odds, stake)
+    combined_prob = correlations.joint_probability_mc(combo)
+    breakeven_prob = 1.0 / dec_odds
+    matchups = [leg["matchup"] for leg in combo]
+    ages = [leg["odds_age_seconds"] for leg in combo if leg.get("odds_age_seconds") is not None]
     return {
         "legs": list(combo),
         "decimal_odds": dec_odds,
@@ -82,27 +55,45 @@ def _build_result(combo, stake):
         "payout": round(payout, 2),
         "stake": stake,
         "combined_prob": combined_prob,
+        "breakeven_prob": breakeven_prob,
+        "ev_pct": (combined_prob * dec_odds - 1) * 100,
         "num_legs": len(combo),
+        "has_same_game_legs": len(set(matchups)) < len(matchups),
+        "odds_age_seconds": max(ages) if ages else None,
+        "odds_age_display": formatting.format_odds_age(max(ages) if ages else None),
     }
+
+
+def _combo_allowed(combo):
+    """No two legs on the same player, and never both sides/teams of the
+    same game-level market (a hedge, not a parlay)."""
+    players = [leg["player"] for leg in combo if leg.get("player")]
+    if len(players) != len(set(players)):
+        return False
+    game_markets = [(leg["matchup"], leg["market"]) for leg in combo if not leg.get("player")]
+    return len(game_markets) == len(set(game_markets))
 
 
 def search_near_target(legs, stake, target_payout, max_legs=MAX_LEGS_SEARCHED,
                         tolerances=(0.15, 0.3, 0.5, 0.75, 0.95)):
     """Returns matches (payout within tolerance of target) sorted by highest
     combined probability. Walks tolerance bands tightest to widest and stops
-    at the FIRST band whose best combo clears MIN_ACCEPTABLE_PROB -- so the
-    target payout is respected as closely as possible, and only gets pulled
-    down toward a lower, safer payout when hitting it closely would mean a
-    near-lottery-ticket combo. Combo stats are computed once against the
-    widest band, then just filtered per tolerance level rather than
-    recomputed each time."""
+    at the FIRST band whose best combo clears the MIN_PROB_VS_FAIR floor --
+    so the target payout is respected as closely as possible, and only gets
+    pulled down toward a lower, safer payout when hitting it closely would
+    mean a combo priced worse than a lottery ticket. Combo stats are
+    computed once against the widest band, then just filtered per tolerance
+    level rather than recomputed each time."""
     widest = tolerances[-1]
     low_widest = target_payout * (1 - widest)
     high_widest = target_payout * (1 + widest)
+    pair_lifts = {}
     all_combos = []
     for size in range(2, min(max_legs, len(legs)) + 1):
         for combo in itertools.combinations(legs, size):
-            dec_odds, payout, combined_prob = combo_stats(combo, stake)
+            if not _combo_allowed(combo):
+                continue
+            dec_odds, payout, combined_prob = combo_stats(combo, stake, pair_lifts)
             if low_widest <= payout <= high_widest:
                 all_combos.append((payout, combined_prob, combo))
 
@@ -115,28 +106,27 @@ def search_near_target(legs, stake, target_payout, max_legs=MAX_LEGS_SEARCHED,
             continue
         matches.sort(key=lambda c: c[1], reverse=True)
         best_matches = matches
-        if matches[0][1] >= MIN_ACCEPTABLE_PROB:
+        best_payout, best_prob, _combo = matches[0]
+        if best_prob >= MIN_PROB_VS_FAIR * stake / best_payout:
             break  # close enough to target AND a reasonable shot -- stop here
 
     if best_matches is None:
         return []
-    return [_build_result(combo, stake) for _payout, _prob, combo in best_matches]
+    return [combo for _payout, _prob, combo in best_matches]
 
 
 def dedupe_best_per_bet(pool):
-    """Collapse every variant of the same underlying bet -- different
-    Over/Under sides, and different books posting different lines for the
-    same player+stat (e.g. Over 39.5 / 44.5 / 49.5 rush yards are all really
-    "will this player rush for a lot," not independent bets) -- down to
-    whichever single variant has the best edge. Deliberately does NOT key on
-    `line`: keeping every line a book happens to offer would let the search
-    stack several near-duplicate bets on the same outcome and count them as
-    independent, which is a much worse double-count than ordinary same-game
-    correlation. Unlike dedupe_best_per_game, this does NOT restrict to one
-    leg per game: different props/markets from the same game can both survive."""
+    """Collapse every variant of the same underlying bet down to whichever
+    single variant has the best edge. For player props that's one leg PER
+    PLAYER: different Over/Under sides, different books' lines for the same
+    stat, and different stats on the same player (a QB's attempts,
+    completions and passing yards are ~0.6-0.7 correlated in real outcomes
+    -- one bet in three disguises). For game-level markets it's one leg per
+    (matchup, market). Different players from the same game can all
+    survive; their real correlation is handled by app/correlations.py."""
     best = {}
     for leg in pool:
-        key = (leg["matchup"], leg["market"], leg.get("player"), leg.get("stat_category"))
+        key = (leg["matchup"], leg["player"]) if leg.get("player") else (leg["matchup"], leg["market"])
         if key not in best or leg["edge"] > best[key]["edge"]:
             best[key] = leg
     return list(best.values())
@@ -170,22 +160,16 @@ def find_best_odds_parlays(pool, stake, target_payout, num_results=3, pool_size=
     """The 'statistically best bets' parlay: no restriction on which games a
     leg can come from -- purely chases the highest achievable hit probability
     at the target payout using every signal the model has (edge, discounted
-    for how historically predictable that stat category is). This CAN select
-    multiple legs from the same game; when it does, the combined probability
-    is an approximation for the same reason a Same Game Parlay's is (legs
-    aren't actually independent) -- each result says whether that happened
-    (`has_same_game_legs`) so that's never hidden."""
+    for how historically predictable that stat category is). Same-game legs
+    are allowed; their combined probability is correlation-adjusted (see
+    app/correlations.py) and each result says whether that happened
+    (`has_same_game_legs`) since a sportsbook will reprice such a ticket in
+    its own Same Game Parlay builder rather than honor the naive product of
+    the individual prices."""
     legs = _drop_redundant_favorite_bets(dedupe_best_per_bet(pool))
     legs = sorted(legs, key=lambda l: l["edge"] - 0.05 * l.get("category_cv", 0.5), reverse=True)[:pool_size]
     matches = search_near_target(legs, stake, target_payout)
-    results = matches[:num_results]
-    for r in results:
-        matchups = [leg["matchup"] for leg in r["legs"]]
-        r["has_same_game_legs"] = len(set(matchups)) < len(matchups)
-        ages = [leg["odds_age_seconds"] for leg in r["legs"] if leg.get("odds_age_seconds") is not None]
-        r["odds_age_seconds"] = max(ages) if ages else None
-        r["odds_age_display"] = formatting.format_odds_age(r["odds_age_seconds"])
-    return results
+    return [build_result(combo, stake) for combo in matches[:num_results]]
 
 
 def best_effort_combo(legs, stake, max_legs=MAX_LEGS_SEARCHED):
@@ -198,7 +182,9 @@ def best_effort_combo(legs, stake, max_legs=MAX_LEGS_SEARCHED):
     best = None
     for size in range(2, min(max_legs, len(legs)) + 1):
         for combo in itertools.combinations(legs, size):
-            result = _build_result(combo, stake)
-            if best is None or result["payout"] > best["payout"]:
-                best = result
-    return best
+            if not _combo_allowed(combo):
+                continue
+            dec_odds = odds_math.parlay_decimal_odds([leg["decimal_odds"] for leg in combo])
+            if best is None or dec_odds > best[0]:
+                best = (dec_odds, combo)
+    return build_result(best[1], stake) if best else None

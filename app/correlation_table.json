@@ -1,0 +1,454 @@
+{
+ "attempts|attempts|opponent": {
+  "n": 3868,
+  "rho": -0.0197
+ },
+ "attempts|attempts|same_team": {
+  "n": 626,
+  "rho": -0.6042
+ },
+ "attempts|completions|opponent": {
+  "n": 3935,
+  "rho": -0.0197
+ },
+ "attempts|completions|same_team": {
+  "n": 4599,
+  "rho": 0.7198
+ },
+ "attempts|margin|own_team": {
+  "n": 3950,
+  "rho": -0.1884
+ },
+ "attempts|passing_tds|opponent": {
+  "n": 3814,
+  "rho": 0.135
+ },
+ "attempts|passing_tds|same_team": {
+  "n": 4439,
+  "rho": 0.188
+ },
+ "attempts|passing_yards|opponent": {
+  "n": 3870,
+  "rho": 0.0442
+ },
+ "attempts|passing_yards|same_team": {
+  "n": 4534,
+  "rho": 0.6033
+ },
+ "attempts|receiving_yards|opponent": {
+  "n": 21817,
+  "rho": 0.0084
+ },
+ "attempts|receiving_yards|same_team": {
+  "n": 21926,
+  "rho": 0.1553
+ },
+ "attempts|receptions|opponent": {
+  "n": 22387,
+  "rho": -0.024
+ },
+ "attempts|receptions|same_team": {
+  "n": 22471,
+  "rho": 0.2126
+ },
+ "attempts|rushing_yards|opponent": {
+  "n": 7791,
+  "rho": 0.0392
+ },
+ "attempts|rushing_yards|same_team": {
+  "n": 7940,
+  "rho": -0.0897
+ },
+ "attempts|total|same_game": {
+  "n": 3950,
+  "rho": 0.0934
+ },
+ "completions|attempts|opponent": {
+  "n": 3935,
+  "rho": -0.0197
+ },
+ "completions|attempts|same_team": {
+  "n": 4599,
+  "rho": 0.7198
+ },
+ "completions|completions|opponent": {
+  "n": 4002,
+  "rho": -0.0058
+ },
+ "completions|completions|same_team": {
+  "n": 676,
+  "rho": -0.5838
+ },
+ "completions|margin|own_team": {
+  "n": 4019,
+  "rho": -0.0616
+ },
+ "completions|passing_tds|opponent": {
+  "n": 3881,
+  "rho": 0.1358
+ },
+ "completions|passing_tds|same_team": {
+  "n": 4510,
+  "rho": 0.2889
+ },
+ "completions|passing_yards|opponent": {
+  "n": 3936,
+  "rho": 0.05
+ },
+ "completions|passing_yards|same_team": {
+  "n": 4592,
+  "rho": 0.665
+ },
+ "completions|receiving_yards|opponent": {
+  "n": 22207,
+  "rho": 0.0168
+ },
+ "completions|receiving_yards|same_team": {
+  "n": 22298,
+  "rho": 0.1837
+ },
+ "completions|receptions|opponent": {
+  "n": 22786,
+  "rho": -0.0141
+ },
+ "completions|receptions|same_team": {
+  "n": 22845,
+  "rho": 0.254
+ },
+ "completions|rushing_yards|opponent": {
+  "n": 7927,
+  "rho": 0.0081
+ },
+ "completions|rushing_yards|same_team": {
+  "n": 8112,
+  "rho": -0.0714
+ },
+ "completions|total|same_game": {
+  "n": 4019,
+  "rho": 0.149
+ },
+ "margin|total|own_team": {
+  "n": 2042,
+  "rho": 0.0213
+ },
+ "passing_tds|attempts|opponent": {
+  "n": 3814,
+  "rho": 0.135
+ },
+ "passing_tds|attempts|same_team": {
+  "n": 4439,
+  "rho": 0.188
+ },
+ "passing_tds|completions|opponent": {
+  "n": 3881,
+  "rho": 0.1358
+ },
+ "passing_tds|completions|same_team": {
+  "n": 4510,
+  "rho": 0.2889
+ },
+ "passing_tds|margin|own_team": {
+  "n": 3906,
+  "rho": 0.2805
+ },
+ "passing_tds|passing_tds|opponent": {
+  "n": 3770,
+  "rho": 0.1203
+ },
+ "passing_tds|passing_tds|same_team": {
+  "n": 606,
+  "rho": -0.3238
+ },
+ "passing_tds|passing_yards|opponent": {
+  "n": 3817,
+  "rho": 0.1444
+ },
+ "passing_tds|passing_yards|same_team": {
+  "n": 4457,
+  "rho": 0.4102
+ },
+ "passing_tds|receiving_yards|opponent": {
+  "n": 21562,
+  "rho": 0.0649
+ },
+ "passing_tds|receiving_yards|same_team": {
+  "n": 21698,
+  "rho": 0.1225
+ },
+ "passing_tds|receptions|opponent": {
+  "n": 22115,
+  "rho": 0.066
+ },
+ "passing_tds|receptions|same_team": {
+  "n": 22210,
+  "rho": 0.0777
+ },
+ "passing_tds|rushing_yards|opponent": {
+  "n": 7665,
+  "rho": -0.0154
+ },
+ "passing_tds|rushing_yards|same_team": {
+  "n": 7855,
+  "rho": 0.0357
+ },
+ "passing_tds|total|same_game": {
+  "n": 3906,
+  "rho": 0.4537
+ },
+ "passing_yards|attempts|opponent": {
+  "n": 3870,
+  "rho": 0.0442
+ },
+ "passing_yards|attempts|same_team": {
+  "n": 4534,
+  "rho": 0.6033
+ },
+ "passing_yards|completions|opponent": {
+  "n": 3936,
+  "rho": 0.05
+ },
+ "passing_yards|completions|same_team": {
+  "n": 4592,
+  "rho": 0.665
+ },
+ "passing_yards|margin|own_team": {
+  "n": 3958,
+  "rho": 0.0579
+ },
+ "passing_yards|passing_tds|opponent": {
+  "n": 3817,
+  "rho": 0.1444
+ },
+ "passing_yards|passing_tds|same_team": {
+  "n": 4457,
+  "rho": 0.4102
+ },
+ "passing_yards|passing_yards|opponent": {
+  "n": 3872,
+  "rho": 0.096
+ },
+ "passing_yards|passing_yards|same_team": {
+  "n": 604,
+  "rho": -0.5664
+ },
+ "passing_yards|receiving_yards|opponent": {
+  "n": 21859,
+  "rho": 0.0442
+ },
+ "passing_yards|receiving_yards|same_team": {
+  "n": 21974,
+  "rho": 0.2489
+ },
+ "passing_yards|receptions|opponent": {
+  "n": 22425,
+  "rho": 0.0226
+ },
+ "passing_yards|receptions|same_team": {
+  "n": 22502,
+  "rho": 0.1955
+ },
+ "passing_yards|rushing_yards|opponent": {
+  "n": 7795,
+  "rho": 0.0166
+ },
+ "passing_yards|rushing_yards|same_team": {
+  "n": 7976,
+  "rho": -0.044
+ },
+ "passing_yards|total|same_game": {
+  "n": 3958,
+  "rho": 0.296
+ },
+ "receiving_yards|attempts|opponent": {
+  "n": 21817,
+  "rho": 0.0084
+ },
+ "receiving_yards|attempts|same_team": {
+  "n": 21926,
+  "rho": 0.1553
+ },
+ "receiving_yards|completions|opponent": {
+  "n": 22207,
+  "rho": 0.0168
+ },
+ "receiving_yards|completions|same_team": {
+  "n": 22298,
+  "rho": 0.1837
+ },
+ "receiving_yards|margin|own_team": {
+  "n": 22449,
+  "rho": 0.0203
+ },
+ "receiving_yards|passing_tds|opponent": {
+  "n": 21562,
+  "rho": 0.0649
+ },
+ "receiving_yards|passing_tds|same_team": {
+  "n": 21698,
+  "rho": 0.1225
+ },
+ "receiving_yards|passing_yards|opponent": {
+  "n": 21859,
+  "rho": 0.0442
+ },
+ "receiving_yards|passing_yards|same_team": {
+  "n": 21974,
+  "rho": 0.2489
+ },
+ "receiving_yards|receiving_yards|opponent": {
+  "n": 124126,
+  "rho": 0.0204
+ },
+ "receiving_yards|receiving_yards|same_team": {
+  "n": 108558,
+  "rho": -0.0022
+ },
+ "receiving_yards|receptions|opponent": {
+  "n": 127277,
+  "rho": 0.0101
+ },
+ "receiving_yards|receptions|same_team": {
+  "n": 132866,
+  "rho": 0.1345
+ },
+ "receiving_yards|rushing_yards|opponent": {
+  "n": 44095,
+  "rho": 0.0074
+ },
+ "receiving_yards|rushing_yards|same_team": {
+  "n": 44890,
+  "rho": -0.0249
+ },
+ "receiving_yards|total|same_game": {
+  "n": 22449,
+  "rho": 0.1301
+ },
+ "receptions|attempts|opponent": {
+  "n": 22387,
+  "rho": -0.024
+ },
+ "receptions|attempts|same_team": {
+  "n": 22471,
+  "rho": 0.2126
+ },
+ "receptions|completions|opponent": {
+  "n": 22786,
+  "rho": -0.0141
+ },
+ "receptions|completions|same_team": {
+  "n": 22845,
+  "rho": 0.254
+ },
+ "receptions|margin|own_team": {
+  "n": 23020,
+  "rho": -0.032
+ },
+ "receptions|passing_tds|opponent": {
+  "n": 22115,
+  "rho": 0.066
+ },
+ "receptions|passing_tds|same_team": {
+  "n": 22210,
+  "rho": 0.0777
+ },
+ "receptions|passing_yards|opponent": {
+  "n": 22425,
+  "rho": 0.0226
+ },
+ "receptions|passing_yards|same_team": {
+  "n": 22502,
+  "rho": 0.1955
+ },
+ "receptions|receiving_yards|opponent": {
+  "n": 127277,
+  "rho": 0.0101
+ },
+ "receptions|receiving_yards|same_team": {
+  "n": 132866,
+  "rho": 0.1345
+ },
+ "receptions|receptions|opponent": {
+  "n": 130434,
+  "rho": -0.0054
+ },
+ "receptions|receptions|same_team": {
+  "n": 114624,
+  "rho": 0.0277
+ },
+ "receptions|rushing_yards|opponent": {
+  "n": 45269,
+  "rho": 0.0079
+ },
+ "receptions|rushing_yards|same_team": {
+  "n": 46038,
+  "rho": -0.036
+ },
+ "receptions|total|same_game": {
+  "n": 23020,
+  "rho": 0.0815
+ },
+ "rushing_yards|attempts|opponent": {
+  "n": 7791,
+  "rho": 0.0392
+ },
+ "rushing_yards|attempts|same_team": {
+  "n": 7940,
+  "rho": -0.0897
+ },
+ "rushing_yards|completions|opponent": {
+  "n": 7927,
+  "rho": 0.0081
+ },
+ "rushing_yards|completions|same_team": {
+  "n": 8112,
+  "rho": -0.0714
+ },
+ "rushing_yards|margin|own_team": {
+  "n": 7991,
+  "rho": 0.2039
+ },
+ "rushing_yards|passing_tds|opponent": {
+  "n": 7665,
+  "rho": -0.0154
+ },
+ "rushing_yards|passing_tds|same_team": {
+  "n": 7855,
+  "rho": 0.0357
+ },
+ "rushing_yards|passing_yards|opponent": {
+  "n": 7795,
+  "rho": 0.0166
+ },
+ "rushing_yards|passing_yards|same_team": {
+  "n": 7976,
+  "rho": -0.044
+ },
+ "rushing_yards|receiving_yards|opponent": {
+  "n": 44095,
+  "rho": 0.0074
+ },
+ "rushing_yards|receiving_yards|same_team": {
+  "n": 44890,
+  "rho": -0.0249
+ },
+ "rushing_yards|receptions|opponent": {
+  "n": 45269,
+  "rho": 0.0079
+ },
+ "rushing_yards|receptions|same_team": {
+  "n": 46038,
+  "rho": -0.036
+ },
+ "rushing_yards|rushing_yards|opponent": {
+  "n": 15722,
+  "rho": -0.066
+ },
+ "rushing_yards|rushing_yards|same_team": {
+  "n": 10598,
+  "rho": 0.0011
+ },
+ "rushing_yards|total|same_game": {
+  "n": 7991,
+  "rho": 0.074
+ }
+}

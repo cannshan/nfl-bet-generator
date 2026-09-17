@@ -39,8 +39,15 @@ def payout_for_stake(decimal_odds, stake):
 
 def make_leg(matchup, commence_time, market, selection, price_info, model_prob, book_fair_prob):
     """Shared shape for anything the parlay builder can pick a leg from --
-    game-level bets and player props alike."""
-    edge = model_prob - book_fair_prob
+    game-level bets and player props alike.
+
+    `edge` is model probability minus the BREAKEVEN probability at the
+    offered price (1 / decimal odds), i.e. the bet's expected value after
+    the book's vig. An earlier definition compared against the devigged
+    fair price instead, which called a bet "+2 points of edge" when it was
+    actually -2.5% EV at -110 -- the vig was simply never counted."""
+    breakeven_prob = 1.0 / price_info["decimal"]
+    edge = model_prob - breakeven_prob
     return {
         "matchup": matchup,
         "commence_time": commence_time,
@@ -51,5 +58,6 @@ def make_leg(matchup, commence_time, market, selection, price_info, model_prob, 
         "bookmaker": price_info["bookmaker"],
         "model_prob": round(model_prob, 4),
         "book_fair_prob": round(book_fair_prob, 4),
+        "breakeven_prob": round(breakeven_prob, 4),
         "edge": round(edge, 4),
     }
