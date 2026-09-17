@@ -192,7 +192,6 @@ def analyze_games(odds_data, model):
 
         home_rating = model["power"][home_key]
         away_rating = model["power"][away_key]
-        pred_margin = ratings.predicted_margin(home_rating, away_rating)
         home_win_prob = ratings.win_probability(home_rating, away_rating)
         away_win_prob = 1 - home_win_prob
 
@@ -240,21 +239,31 @@ def analyze_games(odds_data, model):
 
         # --- Spread --- (find the posted point from the first book that has one; then
         # shop all books for the best price at that point)
+        # NOTE (found in a full model audit, backtested walk-forward against
+        # 5,142 real (game, side) spread observations, 2016-2025 closing
+        # lines): cover_probability showed NO demonstrated skill over the
+        # real market -- every edge bucket landed at ~48-52% actual cover
+        # rate regardless of claimed edge size (a flat line, not the
+        # monotonic separation a real signal would show), consistent with
+        # pure vig loss. Same treatment as Totals: price Spread legs at the
+        # devigged MARKET probability (edge = 0) rather than manufacture a
+        # false edge from a signal proven not to beat the market. This also
+        # fixes a smaller inconsistency where Spread previously compared
+        # against the raw (vig-inflated) price instead of the devigged fair
+        # price like Moneyline/Totals do.
         spread_point = _first_spread_points(bookmakers, home_name, away_name)
         if spread_point:
             home_point, away_point = spread_point
             home_price_s = _best_price(bookmakers, "spreads", home_name, home_point)
             away_price_s = _best_price(bookmakers, "spreads", away_name, away_point)
-            if home_price_s:
-                p = ratings.cover_probability(pred_margin, home_point)
-                book_p = odds_math.american_to_implied_prob(home_price_s["american"])
-                label = f"{home_name} {home_point:+g}"
-                candidates.append(_make_leg(matchup, commence, "Spread", label, home_price_s, p, book_p))
-            if away_price_s:
-                p = 1 - ratings.cover_probability(pred_margin, home_point)
-                book_p = odds_math.american_to_implied_prob(away_price_s["american"])
-                label = f"{away_name} {away_point:+g}"
-                candidates.append(_make_leg(matchup, commence, "Spread", label, away_price_s, p, book_p))
+            if home_price_s and away_price_s:
+                book_home_p = odds_math.american_to_implied_prob(home_price_s["american"])
+                book_away_p = odds_math.american_to_implied_prob(away_price_s["american"])
+                fair_home_p, fair_away_p = odds_math.devig_two_way(book_home_p, book_away_p)
+                home_label = f"{home_name} {home_point:+g}"
+                away_label = f"{away_name} {away_point:+g}"
+                candidates.append(_make_leg(matchup, commence, "Spread", home_label, home_price_s, fair_home_p, fair_home_p))
+                candidates.append(_make_leg(matchup, commence, "Spread", away_label, away_price_s, fair_away_p, fair_away_p))
 
         # --- Totals ---
         # NOTE (found in a full model audit, backtested walk-forward against
