@@ -6,7 +6,7 @@ construction.
 from concurrent.futures import ThreadPoolExecutor
 from statistics import NormalDist, median
 from app.config import SHARP_BOOK_KEY, SHARP_BOOK_WEIGHT
-from app import espn_client, ratings, odds_math, nflverse_client, injury_client, roster_client, odds_client, formatting
+from app import espn_client, ratings, odds_math, nflverse_client, injury_client, roster_client, odds_client
 from app.team_names import build_lookup, match
 
 MIN_EDGE_FOR_VALUE_BET = 0.02   # 2 percentage points of model probability over the breakeven price (i.e. +EV after vig)
@@ -287,8 +287,8 @@ def analyze_games(odds_data, model):
         home_name = game.get("home_team")
         away_name = game.get("away_team")
         bookmakers = game.get("bookmakers", [])
-        if not bookmakers or formatting.has_kicked_off(game.get("commence_time")):
-            continue  # pregame only: a started game's prices are in-play lines
+        if not bookmakers:
+            continue
 
         home_key = match(home_name, lookup)
         away_key = match(away_name, lookup)

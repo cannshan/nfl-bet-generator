@@ -102,7 +102,7 @@ def _available_games():
     games = []
     for e in events:
         home, away = e.get("home_team"), e.get("away_team")
-        if not home or not away or (home, away) in seen or formatting.has_kicked_off(e.get("commence_time")):
+        if not home or not away or (home, away) in seen:
             continue
         seen.add((home, away))
         games.append({
