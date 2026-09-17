@@ -25,15 +25,6 @@
         <div class="leg-odds">{{ '%+d'|format(leg.american_odds) }}<span class="book">{{ leg.bookmaker }}</span></div>
       </div>
     </div>
-    <div class="leg-probs" title="Chance this leg hits, vs. the chance needed to break even at this price">
-      <span class="leg-prob-main">{{ (leg.model_prob * 100)|round(0)|int }}% to hit</span>
-      <span class="leg-prob-sep">·</span>
-      <span>breakeven {{ (leg.breakeven_prob * 100)|round(0)|int }}%</span>
-      {% if leg.get('market_median') is not none and leg.get('model_median') is not none %}
-      <span class="leg-prob-sep">·</span>
-      <span title="Where the sportsbooks' consensus puts this stat vs. where the player's own recent game log alone would put it. The shown probability is ~90% market, ~10% game log.">market {{ leg.market_median }} / game log {{ leg.model_median }}</span>
-      {% endif %}
-    </div>
     {% if leg.injury_note or leg.stale_data_note or leg.return_risk_note or leg.qb_out_note or leg.weather_note or leg.expert_note %}
     <div class="leg-notes">
       {% if leg.injury_note %}<div class="leg-note {% if leg.injury_flag == 'info' %}tone-info{% else %}tone-warn{% endif %}">{{ 'ℹ️' if leg.injury_flag == 'info' else '⚠️' }} {{ leg.injury_note }}</div>{% endif %}
