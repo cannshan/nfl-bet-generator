@@ -32,11 +32,7 @@
       {% if leg.return_risk_note %}<div class="leg-note tone-warn">⚕️ {{ leg.return_risk_note }}</div>{% endif %}
       {% if leg.qb_out_note %}<div class="leg-note tone-warn">🏈 {{ leg.qb_out_note }}</div>{% endif %}
       {% if leg.weather_note %}<div class="leg-note tone-info">🌦️ {{ leg.weather_note }}</div>{% endif %}
-      {% if leg.expert_note %}<div class="leg-note tone-{{ leg.expert_sentiment or 'neutral' }}">🧠 {{ leg.expert_sentiment|capitalize if leg.expert_sentiment and leg.expert_sentiment != 'no_data' else 'Expert take' }}: {{ leg.expert_note }}{% if leg.expert_sentiment in ('bullish', 'bearish') %}
-        <span class="research-grade" title="How much this read is trusted: what it rests on (injury/role news > published projection > matchup analysis > recent-game narrative), how confident the search was, and where it came from. Credible reads move the number and decide which legs make the ticket; narrative reads barely do.">
-          {% set basis_label = {'injury_or_role': 'injury/role news', 'projection': 'projection', 'matchup': 'matchup analysis', 'narrative': 'recent-game narrative', 'none': 'unstated basis'} %}
-          [{{ basis_label.get(leg.expert_basis, 'unstated basis') }}{% if leg.expert_confidence %}, {{ leg.expert_confidence }} confidence{% endif %}{% if leg.expert_sources %} — {{ leg.expert_sources|join(', ') }}{% endif %}{% if leg.expert_credibility is not none %} · weight {{ (leg.expert_credibility * 100)|round|int }}%{% endif %}]
-        </span>{% endif %}</div>{% endif %}
+      {% if leg.expert_note %}<div class="leg-note tone-{{ leg.expert_sentiment or 'neutral' }}">🧠 {{ leg.expert_sentiment|capitalize if leg.expert_sentiment and leg.expert_sentiment != 'no_data' else 'Expert take' }}: {{ leg.expert_note }}</div>{% endif %}
     </div>
     {% endif %}
   </li>
