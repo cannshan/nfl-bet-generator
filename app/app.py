@@ -136,6 +136,15 @@ def _run_bets_pipeline(stake, target, include_props, include_insight, event_filt
             # signal that used to only matter for Same Game Parlay
             # selection) so Statistically Best Bets benefits from it too.
             game_cards.apply_expert_insight(pool, include_insight=include_insight)
+            if event_filter:
+                # A chosen focus game means the ticket is built from THAT
+                # game only -- its props and its spread/total/moneyline --
+                # not just "props from that game plus whatever else is
+                # cheapest across the slate." (The props fetch was already
+                # limited to it; game-level odds come from one bulk call
+                # covering every game, so they're filtered here.)
+                focus_matchups = {f"{away} @ {home}" for home, away in event_filter}
+                pool = [leg for leg in pool if leg["matchup"] in focus_matchups]
             best_odds_parlays = parlay_builder.find_best_odds_parlays(pool, stake, target)
             if cache_utils.live_fetch_allowed():
                 _record_suggestions(best_odds_parlays, meta.get("season"), meta.get("week"))

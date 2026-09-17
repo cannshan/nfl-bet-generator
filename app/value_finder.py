@@ -8,7 +8,14 @@ from app import espn_client, ratings, odds_math, nflverse_client, injury_client,
 from app.team_names import build_lookup, match
 
 MIN_EDGE_FOR_VALUE_BET = 0.02   # 2 percentage points of model probability over the breakeven price (i.e. +EV after vig)
-MIN_PROB_FOR_PARLAY_LEG = 0.50  # don't include legs the model thinks are coinflip-or-worse
+# Legs below this probability are kept out of the parlay pool. Was 0.50
+# ("no coinflip-or-worse legs"), which quietly worked against the target:
+# every leg carries the book's vig, so the way to reach a 200x payout with
+# the HIGHEST hit chance is the fewest legs, i.e. plus-money legs -- an
+# underdog at +150 with an honest 42% is a better building block than two
+# -110 legs at 52% each. The floor now only keeps out deep longshots, where
+# the model tilt and correlation estimates are least trustworthy.
+MIN_PROB_FOR_PARLAY_LEG = 0.25
 # How far a Moneyline probability moves from the devigged market price
 # toward the power-rating model. Backtested walk-forward over 2,118 games
 # with a real closing moneyline (2018-2025, scripts/backtest_moneyline.py):

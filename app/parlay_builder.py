@@ -16,7 +16,7 @@ import itertools
 from app import odds_math, formatting, correlations
 
 MAX_LEGS_SEARCHED = 8
-CROSS_GAME_CANDIDATE_POOL_SIZE = 14
+CROSS_GAME_CANDIDATE_POOL_SIZE = 16
 # A combo landing near the target payout is only accepted if its hit
 # probability is at least this fraction of the FAIR probability for that
 # payout (stake / payout -- the probability at which the bet breaks even).
