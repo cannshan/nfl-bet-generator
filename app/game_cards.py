@@ -47,7 +47,12 @@ def _apply_expert_insight(matchup, props, kickoff_et):
         direction = 1 if leg["side"] == "Over" else -1
         new_prob = max(0.01, min(0.99, leg["model_prob"] + nudge * direction))
         leg["model_prob"] = round(new_prob, 4)
-        leg["edge"] = round(new_prob - leg["book_fair_prob"], 4)
+        leg["edge"] = round(new_prob - leg["breakeven_prob"], 4)
+        # A leg that bets AGAINST the research it displays (an Under under a
+        # bullish note) is incoherent advice, whatever the numbers say: the
+        # nudge alone is too small to keep the search from picking it. Mark
+        # it so the parlay pool can leave it out.
+        leg["contradicts_expert"] = nudge * direction < 0
 
 
 def _prefetch_expert_insight(by_game):

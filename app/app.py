@@ -3,6 +3,12 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for
 from app.config import DEFAULT_STAKE, DEFAULT_TARGET_PAYOUT, BOOKMAKER_KEY
 from app import value_finder, odds_client, game_cards, parlay_builder, expert_insight, injury_client, tracking, cache_utils
 
+
+def _coherent(pool):
+    """Legs whose side doesn't contradict the expert read shown on them
+    (see game_cards._apply_expert_insight)."""
+    return [leg for leg in pool if not leg.get("contradicts_expert")]
+
 # static_folder points at the repo-root public/ directory (Vercel's
 # convention -- it serves public/** from its CDN and Flask's own
 # app.static_folder is explicitly unsupported there), with static_url_path=""
@@ -145,7 +151,7 @@ def _run_bets_pipeline(stake, target, include_props, include_insight, event_filt
                 # covering every game, so they're filtered here.)
                 focus_matchups = {f"{away} @ {home}" for home, away in event_filter}
                 pool = [leg for leg in pool if leg["matchup"] in focus_matchups]
-            best_odds_parlays = parlay_builder.find_best_odds_parlays(pool, stake, target)
+            best_odds_parlays = parlay_builder.find_best_odds_parlays(_coherent(pool), stake, target)
             if cache_utils.live_fetch_allowed():
                 _record_suggestions(best_odds_parlays, meta.get("season"), meta.get("week"))
                 try:
@@ -326,7 +332,11 @@ def redo_leg():
     if meta.get("error"):
         return jsonify({"error": meta["error"]}), 400
 
-    game_legs = [l for l in pool if l["matchup"] == matchup]
+    # Same research + coherence rule as the main pipeline (cached insight
+    # only -- passive mode never spends a live call), so a swapped-in leg
+    # can't contradict the note it displays either.
+    game_cards.apply_expert_insight(pool, include_insight=True)
+    game_legs = [l for l in _coherent(pool) if l["matchup"] == matchup]
     excluded = {_leg_signature(e) for e in exclude}
     excluded_exact = {_exact_signature(current)}
 
