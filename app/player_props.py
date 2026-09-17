@@ -53,7 +53,7 @@ import math
 import re
 from concurrent.futures import ThreadPoolExecutor
 from statistics import NormalDist, median
-from app import odds_client, nflverse_client, ratings, odds_math, espn_client, injury_client, weather_client, roster_client
+from app import odds_client, nflverse_client, ratings, odds_math, espn_client, injury_client, weather_client, roster_client, formatting
 
 # ESPN's comments are written like news blurbs ("X said Wednesday that...,
 # Reporter Name of Outlet reports.") -- strip the trailing attribution clause
@@ -480,7 +480,7 @@ def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None, event_f
         league_avg["pass"] = sum(v["pass"] for v in allowed.values()) / len(allowed)
         league_avg["rush"] = sum(v["rush"] for v in allowed.values()) / len(allowed)
 
-    events = odds_client.get_events()
+    events = [e for e in odds_client.get_events() if not formatting.has_kicked_off(e.get("commence_time"))]
     if event_filter:
         events = [e for e in events if (e.get("home_team"), e.get("away_team")) in event_filter]
     if max_events:
