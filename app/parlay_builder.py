@@ -31,16 +31,20 @@ CROSS_GAME_CANDIDATE_POOL_SIZE = 14
 # they're assumed uncorrelated, but because they haven't been backtested.
 QB_PASS_TOTAL_SAME_DIRECTION_LIFT = 1.24
 QB_PASS_TOTAL_OPPOSITE_DIRECTION_LIFT = 0.76
-# A wider-tolerance combo only replaces a tighter-tolerance one if it's at
-# least this many times more likely to hit. Reaching an ambitious target
-# (e.g. 200x on a $5 stake) can force 7-8 legs, which multiplies down to a
-# ~1-2% combined probability even when each leg is individually solid --
-# that combo would otherwise "win" the tightest-tolerance band every time
-# despite being a much worse bet than a smaller combo paying somewhat less.
-# This is a genuine trade-off, not a bug: a lower target payout will always
-# get you higher win-probability combos, since parlay math doesn't allow both
-# a huge payout and a high hit rate off realistic odds.
-PROB_IMPROVEMENT_FACTOR = 1.5
+# Below this combined probability, a combo is treated as too much of a
+# lottery ticket to settle for -- the search widens the payout tolerance
+# band (accepting a lower payout) until it finds something that clears this
+# floor, or runs out of tolerance bands to try. This intentionally lets the
+# target payout matter as much as possible: a well-priced target is met
+# almost exactly, and only a truly ambitious one (e.g. 200x on a $5 stake,
+# which realistically needs 7-8 legs and multiplies down to ~1-2%) gets
+# pulled down toward a more sane probability instead of chasing the exact
+# number off a cliff. An earlier version of this logic (always jumping to
+# whichever wider band was "meaningfully more likely") overcorrected: it
+# kept finding a safer option at every single step and ended up ignoring
+# the target payout almost entirely, collapsing every search down near the
+# cheapest, safest combo regardless of what was actually requested.
+MIN_ACCEPTABLE_PROB = 0.10
 
 
 def _qb_pass_total_correlation(combo):
@@ -85,12 +89,13 @@ def _build_result(combo, stake):
 def search_near_target(legs, stake, target_payout, max_legs=MAX_LEGS_SEARCHED,
                         tolerances=(0.15, 0.3, 0.5, 0.75, 0.95)):
     """Returns matches (payout within tolerance of target) sorted by highest
-    combined probability. Walks tolerance bands tightest to widest, but only
-    adopts a wider band's best combo when it's meaningfully more likely to
-    hit (see PROB_IMPROVEMENT_FACTOR) -- so a lower-payout combo with a real
-    shot at winning beats a target-hitting one that's basically a lottery
-    ticket. Combo stats are computed once against the widest band, then just
-    filtered per tolerance level rather than recomputed each time."""
+    combined probability. Walks tolerance bands tightest to widest and stops
+    at the FIRST band whose best combo clears MIN_ACCEPTABLE_PROB -- so the
+    target payout is respected as closely as possible, and only gets pulled
+    down toward a lower, safer payout when hitting it closely would mean a
+    near-lottery-ticket combo. Combo stats are computed once against the
+    widest band, then just filtered per tolerance level rather than
+    recomputed each time."""
     widest = tolerances[-1]
     low_widest = target_payout * (1 - widest)
     high_widest = target_payout * (1 + widest)
@@ -101,7 +106,7 @@ def search_near_target(legs, stake, target_payout, max_legs=MAX_LEGS_SEARCHED,
             if low_widest <= payout <= high_widest:
                 all_combos.append((payout, combined_prob, combo))
 
-    best_matches, best_prob = None, -1.0
+    best_matches = None
     for tol in tolerances:
         low = target_payout * (1 - tol)
         high = target_payout * (1 + tol)
@@ -109,9 +114,9 @@ def search_near_target(legs, stake, target_payout, max_legs=MAX_LEGS_SEARCHED,
         if not matches:
             continue
         matches.sort(key=lambda c: c[1], reverse=True)
-        top_prob = matches[0][1]
-        if best_matches is None or top_prob >= best_prob * PROB_IMPROVEMENT_FACTOR:
-            best_matches, best_prob = matches, top_prob
+        best_matches = matches
+        if matches[0][1] >= MIN_ACCEPTABLE_PROB:
+            break  # close enough to target AND a reasonable shot -- stop here
 
     if best_matches is None:
         return []
