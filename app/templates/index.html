@@ -151,7 +151,6 @@
         </div>
         <div class="odds-line">
           <span class="combined-odds">{{ '%+d'|format(p.american_equivalent) }}</span> combined odds
-          <span class="same-game-note" {% if not p.has_same_game_legs %}hidden{% endif %}>· same-game legs: hit chance is correlation-adjusted; the SGP builder will quote a lower payout than this product</span>
         </div>
         <ul>
           {% for leg in p.legs %}
@@ -245,8 +244,6 @@
                 evWrap.classList.toggle("ev-neg", data.ev_pct < 0);
               }
             }
-            var sameGameNote = card.querySelector(".same-game-note");
-            if (sameGameNote) sameGameNote.hidden = !data.has_same_game_legs;
             var evCaveat = card.querySelector(".ev-caveat");
             if (evCaveat) evCaveat.hidden = !data.has_same_game_legs;
           })
