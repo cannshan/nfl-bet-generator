@@ -12,8 +12,9 @@ found for him (same market-anchored probabilities as the main Bets tab),
 so these are real, honestly-priced bets -- the hair is only how the
 players were picked.
 """
+import datetime as dt
 import re
-from app import value_finder, game_cards, parlay_builder, roster_client, cache_utils, nflverse_client, formatting
+from app import value_finder, game_cards, parlay_builder, roster_client, cache_utils, nflverse_client, formatting, espn_client, odds_client, tracking
 
 # name -> (hair emoji, the look, craziness 1-10). Picked and scored by eye
 # from each player's current ESPN headshot (Oct 2026) -- offensive skill
@@ -131,10 +132,98 @@ def _games_played_this_season(season):
     }
 
 
+def _iso_z(ts):
+    """ESPN writes kickoffs as 2026-10-04T20:25Z; the rest of the app uses
+    the odds feed's 2026-10-04T20:25:00Z."""
+    if ts and len(ts) == 17 and ts.endswith("Z"):
+        return ts[:-1] + ":00Z"
+    return ts
+
+
+def _games_this_week():
+    """{team full name: {"matchup", "kickoff_iso", "status"}} for every game
+    of the current NFL week (Tuesday-Monday, tracking.season_week_for_kickoff)
+    -- finished, in progress and upcoming alike. ESPN's (cached) scoreboard
+    lists the whole week; the odds feed's cached events fill in if that
+    cache is from another week. Cache reads only."""
+    now_iso = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    this_week = tracking.season_week_for_kickoff(now_iso)
+    games = {}
+
+    def _add(home, away, kickoff_iso, finished=False):
+        if not home or not away or tracking.season_week_for_kickoff(kickoff_iso) != this_week:
+            return
+        if not formatting.has_kicked_off(kickoff_iso):
+            status = "Upcoming"
+        else:
+            # The cached scoreboard can lag; any game 4h+ past kickoff is over.
+            long_ago = formatting.has_kicked_off(
+                kickoff_iso, now=dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=4))
+            status = "Final" if finished or long_ago else "Kicked off"
+        info = {"matchup": f"{away} @ {home}", "kickoff_iso": kickoff_iso, "status": status}
+        for team in (home, away):
+            if team not in games or (finished and games[team]["status"] != "Final"):
+                games[team] = info
+
+    try:
+        for event in espn_client.get_current_scoreboard().get("events", []):
+            comp = event["competitions"][0]
+            sides = {c.get("homeAway"): c["team"]["displayName"] for c in comp["competitors"]}
+            finished = event.get("status", {}).get("type", {}).get("state") == "post"
+            _add(sides.get("home"), sides.get("away"), _iso_z(event.get("date")), finished)
+    except Exception:
+        pass
+    try:
+        for event in odds_client.get_events():
+            _add(event.get("home_team"), event.get("away_team"), event.get("commence_time"))
+    except Exception:
+        pass
+    return games
+
+
+def _top_styles_of_the_week(games_played, picks):
+    """The TOP_HAIR_COUNT craziest hairstyles among regulars whose team
+    plays this week -- including games already played, so the showcase
+    covers the whole week rather than only what's still bettable. A
+    player's pregame bet rides along when one is still available."""
+    week_games = _games_this_week()
+    if not week_games:
+        return []
+    try:
+        rosters = roster_client.get_current_rosters()
+    except Exception:
+        rosters = {}
+    rosters_by_norm = {_norm(name): team for name, team in rosters.items()}
+    picks_by_norm = {_norm(p["name"]): p for p in picks}
+
+    candidates = []
+    for norm, (name, emoji, look, crazy) in _HAIR_BY_NORM.items():
+        this_season, total = games_played.get(norm, (0, 0))
+        team = rosters_by_norm.get(norm)
+        if not team or team not in week_games or this_season < 1 or total < MIN_GAMES_THIS_SEASON:
+            continue
+        game = week_games[team]
+        pick = picks_by_norm.get(norm)
+        candidates.append({
+            "name": name, "emoji": emoji, "look": look, "craziness": crazy,
+            "matchup": game["matchup"], "status": game["status"],
+            "kickoff_et": formatting.format_kickoff_et(game["kickoff_iso"]),
+            "leg": pick["leg"] if pick else None,
+        })
+    # Craziest first; ties go to someone with a bet still available.
+    candidates.sort(key=lambda c: (-c["craziness"], c["leg"] is None, c["name"]))
+    top = candidates[:TOP_HAIR_COUNT]
+    headshots = _headshots_by_norm() if top else {}
+    for c in top:
+        c["photo"] = headshots.get(_norm(c["name"]))
+    return top
+
+
 def get_leahs_bets(stake):
-    """Returns (picks, top_hair, parlay, error): every eligible hair pick
-    (likeliest first), the TOP_HAIR_COUNT craziest of them, and a parlay of
-    the likeliest picks. Reads only what's already cached --
+    """Returns (picks, top_hair, parlay, error): every eligible (pregame)
+    hair pick, likeliest first; the week's Top Styles (any game this week,
+    played or not -- see _top_styles_of_the_week); and a parlay of the
+    likeliest picks. Reads only what's already cached --
     callers set cache_utils mode to passive, so this never spends quota."""
     try:
         _value_bets, pool, meta = value_finder.get_value_bets_and_pool()
@@ -166,8 +255,7 @@ def get_leahs_bets(stake):
         for leg, (name, emoji, look, crazy) in best.values()
     ]
     picks.sort(key=lambda p: -p["leg"]["model_prob"])
-    # Craziest hair first; ties go to the likelier bet.
-    top_hair = sorted(picks, key=lambda p: (-p["craziness"], -p["leg"]["model_prob"]))[:TOP_HAIR_COUNT]
+    top_hair = _top_styles_of_the_week(games_played, picks)
 
     parlay = None
     parlay_legs = [p["leg"] for p in picks[:PARLAY_LEGS]]
