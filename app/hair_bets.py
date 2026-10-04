@@ -1,4 +1,4 @@
-"""Leah's Bets: player props on guys with notable hair.
+"""Leah's Hairplays: player props on guys with notable hair.
 
 The hair list is hand-curated (hairstyles change -- edit HAIR_PLAYERS freely).
 "Plays on a regular basis" is enforced by the data rather than the list: a
