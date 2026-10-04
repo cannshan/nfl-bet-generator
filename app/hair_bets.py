@@ -1,4 +1,4 @@
-"""Leah's Hairplays: player props on guys with notable hair.
+"""Leah's Hairlays: player props on guys with notable hair.
 
 The hair list is hand-curated (hairstyles change -- edit HAIR_PLAYERS freely).
 "Plays on a regular basis" is enforced by the data rather than the list: a
@@ -49,6 +49,23 @@ HAIR_PLAYERS = {
     "Luther Burden III": ("🦁", "Locs", 4),
     "Omarion Hampton": ("🦁", "Locs", 4),
     "Kaleb Johnson": ("🦁", "Long locs", 5),
+    "Jameson Williams": ("🦁", "Dreads", 5),
+    "James Cook": ("🦁", "Locs", 4),
+    "Javonte Williams": ("🦁", "Dreads", 5),
+    "Jonathan Taylor": ("🦁", "Braids", 4),
+    "Tyjae Spears": ("🦁", "Long dreads", 5),
+    "Tre Tucker": ("🦁", "Locs", 4),
+    "Pat Bryant": ("🦁", "Locs", 4),
+    "Tai Felton": ("🦁", "Dreads", 5),
+    "Wan'Dale Robinson": ("🦁", "Locs", 4),
+    "Davante Adams": ("🦁", "Locs", 4),
+    "Cam Ward": ("🦁", "Dreads", 5),
+    "Kyler Murray": ("🦁", "Locs", 4),
+    "Bhayshul Tuten": ("🦁", "Dreads", 5),
+    "Isaiah Likely": ("☁️", "Curly fro", 6),
+    "Oronde Gadsden II": ("🌀", "Curly top", 5),
+    "Ty Johnson": ("🌀", "Curly mop + headband", 6),
+    "Xavier Hutchinson": ("🌀", "Curly mop", 5),
     # Headwear department
     "Keon Coleman": ("🟡", "Bright yellow durag in his official headshot", 9),
     "Michael Penix Jr.": ("🏴‍☠️", "Durag in his official headshot", 6),
@@ -58,8 +75,8 @@ HAIR_PLAYERS = {
 
 TOP_HAIR_COUNT = 3
 
-# "Plays on a regular basis": a prop line this week AND at least this many
-# games played this season.
+# "Plays on a regular basis": a prop line this week, a game this season,
+# and at least this many games across this season and last.
 MIN_GAMES_THIS_SEASON = 3
 
 PARLAY_LEGS = 4
@@ -105,7 +122,13 @@ def _games_played_this_season(season):
         index = nflverse_client.build_player_index(season)
     except Exception:
         return {}
-    return {_norm(name): sum(1 for _r, w in rows if w >= 1.0) for name, rows in index.items()}
+    # (this season, this season + last season): early in a season a starter
+    # can have only a game or two, so last season's games count toward
+    # "plays regularly" as long as he has played this season too.
+    return {
+        _norm(name): (sum(1 for _r, w in rows if w >= 1.0), len(rows))
+        for name, rows in index.items()
+    }
 
 
 def get_leahs_bets(stake):
@@ -129,7 +152,8 @@ def get_leahs_bets(stake):
         if formatting.has_kicked_off(leg.get("commence_time")):
             continue  # in-play price -- pregame bets only
         hair = _HAIR_BY_NORM.get(_norm(leg["player"]))
-        if not hair or games_played.get(_norm(leg["player"]), 0) < MIN_GAMES_THIS_SEASON:
+        this_season, total = games_played.get(_norm(leg["player"]), (0, 0))
+        if not hair or this_season < 1 or total < MIN_GAMES_THIS_SEASON:
             continue
         key = hair[0]
         if key not in best or _pick_score(leg) > _pick_score(best[key][0]):
