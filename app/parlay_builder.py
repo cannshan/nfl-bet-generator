@@ -42,6 +42,12 @@ MAX_SHARED_LEG_FRACTION = 0.5
 # NEGATIVE-edge -- picked because they were likely to hit, not because the
 # price was right -- so every ticket stacked the book's vig leg after leg.
 MIN_EDGE_FOR_PARLAY_LEG = 0.0
+# Every game must still get a ticket. When break-even-or-better legs alone
+# can't make one (common for a single focus game, or late in a slate when
+# most games have kicked off), the floor relaxes one step at a time and the
+# ticket is flagged (relaxed_edge) so the card can say so -- its EV is shown
+# honestly, negative or not. None = any pregame, non-contradicting leg.
+EDGE_FALLBACK_TIERS = (MIN_EDGE_FOR_PARLAY_LEG, -0.025, -0.05, None)
 # "Positive" tickets: prefer legs where a player OVERachieves (Overs) over
 # Unders. A preference, never a filter -- every leg still has to clear
 # MIN_EDGE_FOR_PARLAY_LEG. Kept small on purpose: the prop backtest found
@@ -51,14 +57,15 @@ OVER_RANK_BONUS = 0.02    # added to a leg's rank_score (edge units) when it's a
 OVER_TICKET_BOOST = 1.03  # in ticket RANKING only, each Over leg counts its joint prob 3% higher
 
 
-def parlay_eligible(leg):
-    """Whether a pool leg may go on a ticket: priced at break-even or better,
-    not contradicting the research note it displays, and pregame. The odds
-    feed keeps a game listed while it's being played, with in-play prices;
-    the model is pregame-only, so a started game's prices are never legs
-    (seen in practice: a live Over 43.5 at +188 topped the edge list)."""
+def parlay_eligible(leg, min_edge=MIN_EDGE_FOR_PARLAY_LEG):
+    """Whether a pool leg may go on a ticket: priced at `min_edge` or better
+    (None = no price floor; see EDGE_FALLBACK_TIERS), not contradicting the
+    research note it displays, and pregame. The odds feed keeps a game
+    listed while it's being played, with in-play prices; the model is
+    pregame-only, so a started game's prices are never legs (seen in
+    practice: a live Over 43.5 at +188 topped the edge list)."""
     return (
-        leg.get("edge", -1.0) >= MIN_EDGE_FOR_PARLAY_LEG
+        (min_edge is None or leg.get("edge", -1.0) >= min_edge)
         and not leg.get("contradicts_expert")
         and not formatting.has_kicked_off(leg.get("commence_time"))
     )
@@ -153,7 +160,18 @@ def _combo_allowed(combo):
     if len(players) != len(set(players)):
         return False
     game_markets = [(leg["matchup"], leg["market"]) for leg in combo if not leg.get("player")]
-    return len(game_markets) == len(set(game_markets))
+    if len(game_markets) != len(set(game_markets)):
+        return False
+    # One team's moneyline with the OTHER team's spread is a hedge too (it
+    # only wins on a narrow margin) -- seen as a -49% EV fallback ticket.
+    margin_teams = {}
+    for leg in combo:
+        if not leg.get("player") and leg["market"] in ("Spread", "Moneyline"):
+            teams = margin_teams.setdefault(leg["matchup"], set())
+            teams.add(leg.get("team") or leg["selection"])
+            if len(teams) > 1:
+                return False
+    return True
 
 
 def search_near_target(legs, stake, target_payout, max_legs=MAX_LEGS_SEARCHED,
@@ -288,29 +306,53 @@ def find_best_odds_parlays(pool, stake, target_payout, num_results=3, pool_size=
     at the target payout using every signal the model has (edge, discounted
     for how historically predictable that stat category is). Same-game legs
     are allowed; their combined probability is correlation-adjusted (see
-    app/correlations.py) and each result says whether that happened
-    (`has_same_game_legs`) since a sportsbook will reprice such a ticket in
-    its own Same Game Parlay builder rather than honor the naive product of
-    the individual prices."""
-    legs = _drop_redundant_favorite_bets(dedupe_best_per_bet([l for l in pool if parlay_eligible(l)]))
-    legs = sorted(legs, key=rank_score, reverse=True)[:pool_size]
-    matches = search_near_target(legs, stake, target_payout)
-    return [build_result(combo, stake) for combo in pick_diverse(matches, num_results)]
+    app/correlations.py) and their payout is the estimated same-game price
+    (sgp_lift).
+
+    Tries break-even-or-better legs first and relaxes the price floor a step
+    at a time (EDGE_FALLBACK_TIERS) only when that can't produce a ticket, so
+    any game with at least two pregame legs always gets one. If nothing lands
+    near the target even then, falls back to the highest-payout combo.
+    Every result carries `edge_floor` and `relaxed_edge`."""
+    legs = []
+    for min_edge in EDGE_FALLBACK_TIERS:
+        legs = _drop_redundant_favorite_bets(dedupe_best_per_bet([l for l in pool if parlay_eligible(l, min_edge)]))
+        legs = sorted(legs, key=rank_score, reverse=True)[:pool_size]
+        matches = search_near_target(legs, stake, target_payout)
+        if matches:
+            return [_with_edge_floor(build_result(combo, stake), min_edge)
+                    for combo in pick_diverse(matches, num_results)]
+    fallback = best_effort_combo(legs, stake)
+    return [_with_edge_floor(fallback, None)] if fallback else []
+
+
+def _with_edge_floor(result, min_edge):
+    result["edge_floor"] = min_edge
+    result["relaxed_edge"] = min_edge != MIN_EDGE_FOR_PARLAY_LEG
+    return result
 
 
 def best_effort_combo(legs, stake, max_legs=MAX_LEGS_SEARCHED):
     """Fallback for when nothing lands near the target even at the widest
-    tolerance (common for a game with few/low-odds legs): just take the
-    highest-payout combination available, so there's still something to show
-    rather than nothing."""
+    tolerance (a game with only a few legs, e.g. next week's games before
+    their props are posted): the highest-payout combination that is still a
+    fair shot -- hit chance at least MIN_PROB_VS_FAIR of its break-even
+    chance, the same floor the main search uses. Plain "highest payout"
+    used to pick self-contradicting hedges (one team's moneyline with the
+    other team's spread: -96% EV) because they pay the most. If no combo
+    clears the floor, the best-EV combo instead."""
     if len(legs) < 2:
         return None
-    best = None
+    pair_lifts, book_lifts = {}, {}
+    best, best_ev = None, None
     for size in range(2, min(max_legs, len(legs)) + 1):
         for combo in itertools.combinations(legs, size):
             if not _combo_allowed(combo):
                 continue
-            dec_odds = odds_math.parlay_decimal_odds([leg["decimal_odds"] for leg in combo]) / sgp_lift(combo)
-            if best is None or dec_odds > best[0]:
+            dec_odds, _payout, prob = combo_stats(combo, stake, pair_lifts, book_lifts)
+            if prob >= MIN_PROB_VS_FAIR / dec_odds and (best is None or dec_odds > best[0]):
                 best = (dec_odds, combo)
-    return build_result(best[1], stake) if best else None
+            if best_ev is None or prob * dec_odds > best_ev[0]:
+                best_ev = (prob * dec_odds, combo)
+    chosen = best or best_ev
+    return build_result(chosen[1], stake) if chosen else None

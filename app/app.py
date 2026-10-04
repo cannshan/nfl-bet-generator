@@ -5,13 +5,6 @@ from app.config import DEFAULT_STAKE, DEFAULT_TARGET_PAYOUT, BOOKMAKER_KEY
 from app import value_finder, odds_client, game_cards, parlay_builder, expert_insight, injury_client, tracking, cache_utils, formatting, hair_bets
 
 
-def _coherent(pool):
-    """Legs that may go on a ticket: break-even or better at the offered
-    price, not contradicting the expert read shown on them (see
-    game_cards._apply_expert_insight), and pregame -- see
-    parlay_builder.parlay_eligible."""
-    return [leg for leg in pool if parlay_builder.parlay_eligible(leg)]
-
 # static_folder points at the repo-root public/ directory (Vercel's
 # convention -- it serves public/** from its CDN and Flask's own
 # app.static_folder is explicitly unsupported there), with static_url_path=""
@@ -171,7 +164,10 @@ def _run_bets_pipeline(stake, target, include_props, include_insight, event_filt
                 # covering every game, so they're filtered here.)
                 focus_matchups = {f"{away} @ {home}" for home, away in event_filter}
                 pool = [leg for leg in pool if leg["matchup"] in focus_matchups]
-            best_odds_parlays = parlay_builder.find_best_odds_parlays(_coherent(pool), stake, target)
+            # Lets the page tell "nothing loaded" apart from "loaded, but too
+            # few pregame legs to build any ticket" (e.g. the game started).
+            meta["pregame_legs"] = sum(1 for leg in pool if parlay_builder.parlay_eligible(leg, min_edge=None))
+            best_odds_parlays = parlay_builder.find_best_odds_parlays(pool, stake, target)
             if cache_utils.live_fetch_allowed():
                 _record_suggestions(best_odds_parlays, meta.get("season"), meta.get("week"))
                 try:
@@ -430,22 +426,9 @@ def redo_leg():
     # only -- passive mode never spends a live call), so a swapped-in leg
     # can't contradict the note it displays either.
     game_cards.apply_expert_insight(pool, include_insight=True)
-    game_legs = [l for l in _coherent(pool) if l["matchup"] == matchup]
     excluded = {_leg_signature(e) for e in exclude}
     excluded_exact = {_exact_signature(current)}
-
     player = current.get("player")
-    if player:
-        search_order = [
-            [l for l in game_legs if l.get("player") == player],
-            [l for l in game_legs if l.get("player") and l.get("player") != player],
-            [l for l in game_legs if not l.get("player")],
-        ]
-    else:
-        search_order = [
-            [l for l in game_legs if not l.get("player")],
-            [l for l in game_legs if l.get("player")],
-        ]
 
     others = []
     for e in exclude:
@@ -466,16 +449,33 @@ def redo_leg():
 
     score = in_context if others else parlay_builder.rank_score
 
+    # Same price-floor fallback as the ticket search: break-even-or-better
+    # swaps first, relaxing only if this game has none left to offer.
     candidate = None
-    for group in search_order:
-        options = [
-            l for l in group
-            if _leg_signature(l) not in excluded and _exact_signature(l) not in excluded_exact
-        ]
-        if others:
-            options = [l for l in options if in_context(l)[0] >= 0]
-        if options:
-            candidate = max(options, key=score)
+    for min_edge in parlay_builder.EDGE_FALLBACK_TIERS:
+        game_legs = [l for l in pool if l["matchup"] == matchup and parlay_builder.parlay_eligible(l, min_edge)]
+        if player:
+            search_order = [
+                [l for l in game_legs if l.get("player") == player],
+                [l for l in game_legs if l.get("player") and l.get("player") != player],
+                [l for l in game_legs if not l.get("player")],
+            ]
+        else:
+            search_order = [
+                [l for l in game_legs if not l.get("player")],
+                [l for l in game_legs if l.get("player")],
+            ]
+        for group in search_order:
+            options = [
+                l for l in group
+                if _leg_signature(l) not in excluded and _exact_signature(l) not in excluded_exact
+            ]
+            if others:
+                options = [l for l in options if in_context(l)[0] >= 0]
+            if options:
+                candidate = max(options, key=score)
+                break
+        if candidate is not None:
             break
 
     if candidate is None:

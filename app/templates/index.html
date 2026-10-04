@@ -102,7 +102,7 @@
     </label>
     <input type="hidden" name="props" value="0" style="display:none">
     <label>Focus game (props only)
-      <select name="focus_game">
+      <select name="focus_game" id="focus-game-select" title="Switching games uses the odds already loaded (free). Refresh Bets fetches new odds for the selected game.">
         <option value="" {% if not focus_game %}selected{% endif %}>All games</option>
         {% for g in available_games %}
           <option value="{{ g.value }}" {% if g.value == focus_game %}selected{% endif %}>{{ g.value }}{% if g.kickoff_et %} — {{ g.kickoff_et }}{% endif %}</option>
@@ -118,6 +118,19 @@
     {% endif %}
     <button type="submit">Refresh Bets</button>
   </form>
+  <script>
+    // Picking a game re-shows the page from the odds already loaded -- the
+    // dashboard route is cache-only, so this is free and instant. Only the
+    // Refresh Bets button fetches new odds (for the selected game, or all).
+    (function () {
+      var select = document.getElementById("focus-game-select");
+      if (!select) return;
+      select.addEventListener("change", function () {
+        var params = new URLSearchParams(new FormData(select.form));
+        window.location.href = "{{ url_for('dashboard') }}?" + params.toString();
+      });
+    })();
+  </script>
   {% if never_refreshed %}
     <div class="meta" style="margin-bottom:20px;">
       Nothing's been loaded yet on this deployment. Click <strong>Refresh Bets</strong> above to pull
@@ -150,6 +163,9 @@
             <span class="prob ev {% if p.ev_pct >= 0 %}ev-pos{% else %}ev-neg{% endif %}" title="Expected value of the ticket after the book's vig. When legs share a game, the payout is an ESTIMATE of DraftKings' same-game price (it reprices correlated legs below the multiplied odds) -- check the exact payout in the app before betting.">EV <span class="ev-value">{{ '%+.0f'|format(p.ev_pct) }}</span>%<span class="ev-caveat" {% if not p.sgp_repriced %}hidden{% endif %}> · est. SGP price</span></span>
           </div>
         </div>
+        {% if p.relaxed_edge %}
+        <div class="leg-note tone-warn relaxed-note">⚠️ Not enough legs priced break-even or better{% if focus_game %} in this game{% endif %} — this is the best available ticket and includes legs priced below break-even (see EV).</div>
+        {% endif %}
         <ul>
           {% for leg in p.legs %}
             {{ legs.render_leg(leg, show_matchup=True) }}
@@ -161,8 +177,15 @@
   </section>
   {% endif %}
 
-  {% if not best_odds_parlays and not error %}
-    <p class="meta">No bets available yet — click Refresh Bets above to pull today's odds.</p>
+  {% if not best_odds_parlays and not error and not never_refreshed %}
+    {% if meta and meta.pregame_legs is defined %}
+      <p class="meta">No ticket{% if focus_game %} for {{ focus_game }}{% endif %}: the loaded odds have
+        {{ meta.pregame_legs }} pregame leg{{ '' if meta.pregame_legs == 1 else 's' }}{% if focus_game %} for it{% endif %}
+        (a ticket needs 2). The game may have kicked off, or its props aren't posted yet —
+        Refresh Bets pulls the latest.</p>
+    {% else %}
+      <p class="meta">No bets available yet — click Refresh Bets above to pull today's odds.</p>
+    {% endif %}
   {% endif %}
 
   <script>

@@ -328,3 +328,4 @@ footer { color: var(--muted); font-size: 12px; margin-top: 40px; border-top: 1px
 }
 .hair-thumb { width: 64px; height: 64px; object-fit: cover; object-position: top; border-radius: 50%; border: 2px solid var(--border); background: var(--bg); }
 .hair-lineup { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.relaxed-note { margin-bottom: 10px; }
