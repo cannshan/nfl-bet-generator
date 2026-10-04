@@ -1,4 +1,4 @@
-"""Leah's Hairlays: player props on guys with notable hair.
+"""Leah's Hairlays: player props on guys with notable hair or a funny look.
 
 The hair list is hand-curated (hairstyles change -- edit HAIR_PLAYERS freely).
 "Plays on a regular basis" is enforced by the data rather than the list: a
@@ -68,6 +68,25 @@ HAIR_PLAYERS = {
     "Oronde Gadsden II": ("🌀", "Curly top", 5),
     "Ty Johnson": ("🌀", "Curly mop + headband", 6),
     "Xavier Hutchinson": ("🌀", "Curly mop", 5),
+    "Calvin Ridley": ("🦁", "Dreads piled up top", 5),
+    "Emanuel Wilson": ("🦁", "Dreads", 4),
+    "Jaylen Wright": ("🦁", "Dreads spilling out of a cap", 5),
+    "Keaton Mitchell": ("🦁", "Dreads", 4),
+    "Malik Willis": ("🦁", "Dreads", 4),
+    "Kyle Williams": ("🦁", "Locs + headband", 5),
+    "Rashee Rice": ("🧢", "Locs under a team cap", 5),
+    "Skyy Moore": ("⚡", "Twists", 5),
+    "Bijan Robinson": ("⚡", "Twist-top", 4),
+    "Lamar Jackson": ("⚡", "Short twists", 4),
+    "Devaughn Vele": ("🌀", "Curly top", 4),
+    "Isaiah Davis": ("🌀", "Curly mop", 5),
+    "Theo Johnson": ("🌀", "Curly top", 4),
+    "Isaac TeSlaa": ("💨", "Swept-back flow", 5),
+    "Matthew Stafford": ("💨", "Shaggy dad flow", 5),
+    "Puka Nacua": ("🧔", "Wavy mop + full beard", 6),
+    "Chris Olave": ("🎽", "Headband in his official headshot", 5),
+    "Tre Harris": ("🎽", "Headband in his official headshot", 5),
+    "Sione Vaki": ("🎽", "Curls + headband", 6),
     # Headwear department
     "Keon Coleman": ("🟡", "Bright yellow durag in his official headshot", 9),
     "Michael Penix Jr.": ("🏴‍☠️", "Durag in his official headshot", 6),
