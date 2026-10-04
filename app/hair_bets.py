@@ -14,6 +14,7 @@ players were picked.
 """
 import datetime as dt
 import re
+from app.config import DEFAULT_TARGET_PAYOUT
 from app import value_finder, game_cards, parlay_builder, roster_client, cache_utils, nflverse_client, formatting, espn_client, odds_client, tracking
 
 # name -> (hair emoji, the look, craziness 1-10). Picked and scored by eye
@@ -80,7 +81,10 @@ TOP_HAIR_COUNT = 3
 # and at least this many games across this season and last.
 MIN_GAMES_THIS_SEASON = 3
 
-PARLAY_LEGS = 4
+# The hair parlay is one game's $5 -> ~$1000 ticket: every hair player in
+# that game (up to this many) is on it, filled out with the game's best
+# other legs by the same rules as the Bets tab.
+MAX_HAIR_ANCHORS = 4
 
 
 def _norm(name):
@@ -219,18 +223,50 @@ def _top_styles_of_the_week(games_played, picks):
     return top
 
 
-def get_leahs_bets(stake):
-    """Returns (picks, top_hair, parlay, error): every eligible (pregame)
-    hair pick, likeliest first; the week's Top Styles (any game this week,
-    played or not -- see _top_styles_of_the_week); and a parlay of the
-    likeliest picks. Reads only what's already cached --
+def _hair_parlay_for_game(pool, matchup, anchors, stake, target):
+    """Best ~target ticket from ONE game that includes every anchor (hair
+    player) leg. Uses the main search's price-floor tiers -- break-even legs
+    first, relaxing only when the game can't reach the target otherwise
+    (flagged relaxed_edge) -- and the highest fair-shot payout as a last
+    resort, so a game with a hair player always gets a ticket."""
+    anchor_players = {leg["player"] for leg in anchors}
+    others = []
+    for min_edge in parlay_builder.EDGE_FALLBACK_TIERS:
+        others = parlay_builder.dedupe_best_per_bet([
+            l for l in pool
+            if l["matchup"] == matchup and l.get("player") not in anchor_players
+            and parlay_builder.parlay_eligible(l, min_edge)
+        ])
+        others = sorted(parlay_builder._drop_redundant_favorite_bets(others),
+                        key=parlay_builder.rank_score, reverse=True)[:parlay_builder.CROSS_GAME_CANDIDATE_POOL_SIZE]
+        # Reaching the target is the point of this ticket: a price tier only
+        # counts if it lands within 30% of it; the last (any-leg) tier may
+        # widen like the main search does.
+        tolerances = (0.15, 0.3) if min_edge is not None else (0.15, 0.3, 0.5, 0.75, 0.95)
+        matches = parlay_builder.search_near_target(others, stake, target, tolerances=tolerances, required=anchors)
+        if matches:
+            result = parlay_builder.build_result(matches[0], stake)
+            result["relaxed_edge"] = min_edge != parlay_builder.MIN_EDGE_FOR_PARLAY_LEG
+            return result
+    result = parlay_builder.best_effort_combo(others, stake, required=anchors)
+    if result:
+        result["relaxed_edge"] = True
+    return result
+
+
+def get_leahs_bets(stake, focus_game="", target=DEFAULT_TARGET_PAYOUT):
+    """Returns (picks, top_hair, parlay, hair_games, selected_game, error):
+    every eligible (pregame) hair pick, likeliest first; the week's Top
+    Styles (any game this week, played or not -- see
+    _top_styles_of_the_week); the stake -> ~target hair parlay for the
+    selected game; the games that have hair picks; and which one is shown. Reads only what's already cached --
     callers set cache_utils mode to passive, so this never spends quota."""
     try:
         _value_bets, pool, meta = value_finder.get_value_bets_and_pool()
     except Exception as e:
-        return [], [], None, f"Couldn't read cached odds: {e}"
+        return [], [], None, [], "", f"Couldn't read cached odds: {e}"
     if meta.get("error"):
-        return [], [], None, meta["error"]
+        return [], [], None, [], "", meta["error"]
     game_cards.apply_expert_insight(pool, include_insight=True)
     games_played = _games_played_this_season(meta.get("season"))
 
@@ -257,8 +293,20 @@ def get_leahs_bets(stake):
     picks.sort(key=lambda p: -p["leg"]["model_prob"])
     top_hair = _top_styles_of_the_week(games_played, picks)
 
+    # Games that have a pregame hair pick, in kickoff order; the parlay is
+    # for the chosen one (default: the soonest).
+    games = {}
+    for p in picks:
+        games.setdefault(p["leg"]["matchup"], {"value": p["leg"]["matchup"], "kickoff_iso": p["leg"].get("commence_time") or "", "hair": []})["hair"].append(p["name"])
+    hair_games = sorted(games.values(), key=lambda g: g["kickoff_iso"])
+    for g in hair_games:
+        g["kickoff_et"] = formatting.format_kickoff_et(g["kickoff_iso"])
+    selected = focus_game if focus_game in games else (hair_games[0]["value"] if hair_games else "")
+
     parlay = None
-    parlay_legs = [p["leg"] for p in picks[:PARLAY_LEGS]]
-    if len(parlay_legs) >= 2:
-        parlay = parlay_builder.build_result(parlay_legs, stake)
-    return picks, top_hair, parlay, None
+    if selected:
+        anchors = [p["leg"] for p in picks if p["leg"]["matchup"] == selected][:MAX_HAIR_ANCHORS]
+        parlay = _hair_parlay_for_game(pool, selected, anchors, stake, target)
+        if parlay:
+            parlay["hair_players"] = {leg["player"] for leg in anchors}
+    return picks, top_hair, parlay, hair_games, selected, None

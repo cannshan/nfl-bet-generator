@@ -175,7 +175,7 @@ def _combo_allowed(combo):
 
 
 def search_near_target(legs, stake, target_payout, max_legs=MAX_LEGS_SEARCHED,
-                        tolerances=(0.15, 0.3, 0.5, 0.75, 0.95)):
+                        tolerances=(0.15, 0.3, 0.5, 0.75, 0.95), required=()):
     """Returns matches (payout within tolerance of target) sorted by highest
     combined probability. Walks tolerance bands tightest to widest and stops
     at the FIRST band whose best combo clears the MIN_PROB_VS_FAIR floor --
@@ -189,8 +189,7 @@ def search_near_target(legs, stake, target_payout, max_legs=MAX_LEGS_SEARCHED,
     high_widest = target_payout * (1 + widest)
     pair_lifts, book_lifts = {}, {}
     all_combos = []
-    for size in range(2, min(max_legs, len(legs)) + 1):
-        for combo in itertools.combinations(legs, size):
+    for combo in _combos(legs, max_legs, required):
             if not _combo_allowed(combo):
                 continue
             dec_odds, payout, combined_prob = combo_stats(combo, stake, pair_lifts, book_lifts)
@@ -332,7 +331,19 @@ def _with_edge_floor(result, min_edge):
     return result
 
 
-def best_effort_combo(legs, stake, max_legs=MAX_LEGS_SEARCHED):
+def _combos(legs, max_legs, required=()):
+    """Every combination of 2..max_legs legs; with `required`, every
+    combination that CONTAINS those legs (e.g. Leah's hair players), the
+    rest drawn from `legs`."""
+    required = tuple(required)
+    low = max(0, 2 - len(required))
+    high = min(max_legs - len(required), len(legs))
+    for size in range(low, high + 1):
+        for extra in itertools.combinations(legs, size):
+            yield required + extra
+
+
+def best_effort_combo(legs, stake, max_legs=MAX_LEGS_SEARCHED, required=()):
     """Fallback for when nothing lands near the target even at the widest
     tolerance (a game with only a few legs, e.g. next week's games before
     their props are posted): the highest-payout combination that is still a
@@ -341,12 +352,11 @@ def best_effort_combo(legs, stake, max_legs=MAX_LEGS_SEARCHED):
     used to pick self-contradicting hedges (one team's moneyline with the
     other team's spread: -96% EV) because they pay the most. If no combo
     clears the floor, the best-EV combo instead."""
-    if len(legs) < 2:
+    if len(legs) + len(required) < 2:
         return None
     pair_lifts, book_lifts = {}, {}
     best, best_ev = None, None
-    for size in range(2, min(max_legs, len(legs)) + 1):
-        for combo in itertools.combinations(legs, size):
+    for combo in _combos(legs, max_legs, required):
             if not _combo_allowed(combo):
                 continue
             dec_odds, _payout, prob = combo_stats(combo, stake, pair_lifts, book_lifts)

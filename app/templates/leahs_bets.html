@@ -30,9 +30,20 @@
 
   {% set parlay_photos = {} %}
   {% for p in picks %}{% if p.photo %}{% set _ = parlay_photos.update({p.leg.player: p.photo}) %}{% endif %}{% endfor %}
+  {% if hair_games %}
+  <form class="controls" method="get" action="{{ url_for('leahs_bets') }}">
+    <label>Game
+      <select name="game" onchange="this.form.submit()">
+        {% for g in hair_games %}
+          <option value="{{ g.value }}" {% if g.value == selected_game %}selected{% endif %}>{{ g.value }}{% if g.kickoff_et %} — {{ g.kickoff_et }}{% endif %} ({{ g.hair|join(', ') }})</option>
+        {% endfor %}
+      </select>
+    </label>
+  </form>
+  {% endif %}
   {% if parlay %}
   <section>
-    <h2>Leah's Hair Parlay (${{ stake }})</h2>
+    <h2>Leah's Hair Parlay (${{ stake }} → ~${{ target|round(0)|int }})</h2>
     <div class="parlay-grid">
       <div class="parlay-card no-redo">
         <div class="card-header">
@@ -43,9 +54,13 @@
           <div class="payout-badge">
             <span class="payout">${{ parlay.payout }}</span>
             <span class="prob">{{ (parlay.combined_prob * 100)|round(2) }}% to hit · fair {{ (parlay.breakeven_prob * 100)|round(2) }}%</span>
+            {% if parlay.sgp_repriced %}<span class="prob">est. SGP price</span>{% endif %}
             <span class="prob ev {% if parlay.ev_pct >= 0 %}ev-pos{% else %}ev-neg{% endif %}">EV {{ '%+.0f'|format(parlay.ev_pct) }}%</span>
           </div>
         </div>
+        {% if parlay.relaxed_edge %}
+        <div class="leg-note tone-warn relaxed-note">⚠️ Not enough legs priced break-even or better in this game to reach the target — includes legs priced below break-even (see EV).</div>
+        {% endif %}
         <div class="hair-lineup">
           {% for leg in parlay.legs %}{% if parlay_photos.get(leg.player) %}<img class="hair-thumb" src="{{ parlay_photos[leg.player] }}" alt="{{ leg.player }}" title="{{ leg.player }}" loading="lazy">{% endif %}{% endfor %}
         </div>

@@ -290,12 +290,16 @@ def leahs_bets():
     """Props on players with notable hair (app/hair_bets.py). Cache-only,
     like every plain page view -- Refresh Bets on the main tab loads lines."""
     stake = request.args.get("stake", type=float) or DEFAULT_STAKE
+    target = request.args.get("target", type=float) or DEFAULT_TARGET_PAYOUT
     cache_utils.set_mode("passive")
-    picks, top_hair, parlay, error = hair_bets.get_leahs_bets(stake)
+    picks, top_hair, parlay, hair_games, selected_game, error = hair_bets.get_leahs_bets(
+        stake, request.args.get("game", ""), target,
+    )
     if error and "No historical game data" in error:
         error = None  # nothing refreshed yet on this deployment
     return render_template(
-        "leahs_bets.html", picks=picks, top_hair=top_hair, parlay=parlay, error=error, stake=stake,
+        "leahs_bets.html", picks=picks, top_hair=top_hair, parlay=parlay, error=error,
+        stake=stake, target=target, hair_games=hair_games, selected_game=selected_game,
     )
 
 
