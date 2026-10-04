@@ -318,3 +318,13 @@ footer { color: var(--muted); font-size: 12px; margin-top: 40px; border-top: 1px
   .leg-headline { font-size: 14px; }
   table { display: block; overflow-x: auto; white-space: nowrap; }
 }
+
+/* Leah's Bets: legs are read-only there (no swap script on that page). */
+.no-redo .redo-btn { display: none; }
+.hair-tag { font-size: 12px; color: var(--accent2); margin-bottom: 4px; }
+.hair-photo {
+  display: block; width: 100%; max-height: 220px; object-fit: contain;
+  background: var(--bg); border-radius: 10px; margin-bottom: 10px;
+}
+.hair-thumb { width: 64px; height: 64px; object-fit: cover; object-position: top; border-radius: 50%; border: 2px solid var(--border); background: var(--bg); }
+.hair-lineup { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }

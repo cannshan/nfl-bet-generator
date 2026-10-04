@@ -19,6 +19,22 @@ def format_kickoff_et(commence_time_iso):
     return f"{dt_et.strftime('%a')} {dt_et.month}/{dt_et.day} {hour12}:{dt_et.strftime('%M')} {ampm} ET"
 
 
+def has_kicked_off(commence_time_iso, now=None):
+    """True once a game's kickoff (UTC ISO from the odds feed) has passed.
+    The odds feed keeps a game listed while it's being played, with in-play
+    prices -- this app is pregame only, so a started game's prices must
+    never become legs. Unparseable -> treated as upcoming (never hide a
+    game by accident). The feed sometimes rewrites commence_time to the
+    actual kickoff with seconds (e.g. 13:32:19Z), which parses the same."""
+    if not commence_time_iso:
+        return False
+    try:
+        kickoff = datetime.strptime(commence_time_iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=pytz.utc)
+    except ValueError:
+        return False
+    return kickoff <= (now or datetime.now(pytz.utc))
+
+
 def format_odds_age(age_seconds):
     """How long ago this leg's odds were actually fetched, e.g. 'just now',
     '12m ago', '3h ago'. A plain page view can serve odds of very different

@@ -13,6 +13,7 @@ player (a QB's attempts, completions and passing yards are one bet in
 three disguises), or a team's spread alongside its own moneyline.
 """
 import itertools
+import math
 from app import odds_math, formatting, correlations
 
 MAX_LEGS_SEARCHED = 8
@@ -35,10 +36,73 @@ MIN_PROB_VS_FAIR = 0.5
 # band can't supply enough that different, the limit relaxes one leg at a
 # time rather than showing near-duplicates or nothing.
 MAX_SHARED_LEG_FRACTION = 0.5
+# A leg only goes into a parlay if it is at least break-even at the price
+# offered (edge = model probability - 1/decimal odds, i.e. EV after vig).
+# The tracked record showed why: 98 of the first 151 settled v2 legs were
+# NEGATIVE-edge -- picked because they were likely to hit, not because the
+# price was right -- so every ticket stacked the book's vig leg after leg.
+MIN_EDGE_FOR_PARLAY_LEG = 0.0
+# "Positive" tickets: prefer legs where a player OVERachieves (Overs) over
+# Unders. A preference, never a filter -- every leg still has to clear
+# MIN_EDGE_FOR_PARLAY_LEG. Kept small on purpose: the prop backtest found
+# Overs hit slightly LESS often than priced (47.5% vs 49.3%; rush-yard Overs
+# 41.7%), so a big tilt would trade real hit chance for vibes.
+OVER_RANK_BONUS = 0.02    # added to a leg's rank_score (edge units) when it's an Over
+OVER_TICKET_BOOST = 1.03  # in ticket RANKING only, each Over leg counts its joint prob 3% higher
 
 
-def combo_stats(combo, stake, pair_lifts=None):
-    dec_odds = odds_math.parlay_decimal_odds([leg["decimal_odds"] for leg in combo])
+def parlay_eligible(leg):
+    """Whether a pool leg may go on a ticket: priced at break-even or better,
+    not contradicting the research note it displays, and pregame. The odds
+    feed keeps a game listed while it's being played, with in-play prices;
+    the model is pregame-only, so a started game's prices are never legs
+    (seen in practice: a live Over 43.5 at +188 topped the edge list)."""
+    return (
+        leg.get("edge", -1.0) >= MIN_EDGE_FOR_PARLAY_LEG
+        and not leg.get("contradicts_expert")
+        and not formatting.has_kicked_off(leg.get("commence_time"))
+    )
+
+
+def sgp_lift(combo, exact=False, book_lifts=None):
+    """How much a sportsbook's same-game parlay builder shrinks the payout
+    below the plain product of the legs' prices. DraftKings prices legs
+    from the same game as ONE correlated bet: it estimates their joint
+    probability from its own leg prices plus their correlation, so a
+    positively correlated stack pays less than the multiplied price. The
+    estimate here applies the same correlation table this app uses for its
+    own joint probability to the BOOK's implied probabilities (1/decimal),
+    per same-game group: lift = joint / product. Never below 1 -- a book
+    doesn't pay MORE than the product for a negatively correlated group --
+    and books add extra SGP hold on top, so the estimated payout is, if
+    anything, still a little generous. Without this the search treated the
+    correlation as free money: tickets showed +79% EV at prices no book
+    would actually pay."""
+    groups = {}
+    for leg in combo:
+        groups.setdefault(leg["matchup"], []).append(leg)
+    lift = 1.0
+    for group in groups.values():
+        if len(group) < 2:
+            continue
+        book_probs = [1.0 / leg["decimal_odds"] for leg in group]
+        if exact:
+            joint = correlations.joint_probability_mc(group, probs=book_probs)
+        else:
+            joint = correlations.joint_probability(group, probs=book_probs, pair_lifts=book_lifts)
+        lift *= max(1.0, joint / math.prod(book_probs))
+    return lift
+
+
+def combo_stats(combo, stake, pair_lifts=None, book_lifts=None):
+    """(decimal odds, payout, joint probability) for ranking in the search --
+    the odds already reflect the estimated same-game repricing (sgp_lift),
+    so the search aims at payouts a book would actually pay. `book_lifts`
+    caches pairwise lifts at the book's probabilities, like `pair_lifts`
+    does at the model's (keys are leg-object id pairs, so the two caches
+    must stay separate)."""
+    naive = odds_math.parlay_decimal_odds([leg["decimal_odds"] for leg in combo])
+    dec_odds = naive / sgp_lift(combo, book_lifts=book_lifts)
     payout = odds_math.payout_for_stake(dec_odds, stake)
     combined_prob = correlations.joint_probability(combo, pair_lifts=pair_lifts)
     return dec_odds, payout, combined_prob
@@ -49,7 +113,9 @@ def build_result(combo, stake):
     exact (Monte Carlo) copula evaluation rather than the pairwise
     approximation the search ranks with, plus the fair/breakeven
     probability for the payout and the resulting expected value."""
-    dec_odds = odds_math.parlay_decimal_odds([leg["decimal_odds"] for leg in combo])
+    naive_dec_odds = odds_math.parlay_decimal_odds([leg["decimal_odds"] for leg in combo])
+    lift = sgp_lift(combo, exact=True)
+    dec_odds = naive_dec_odds / lift
     payout = odds_math.payout_for_stake(dec_odds, stake)
     combined_prob = correlations.joint_probability_mc(combo)
     breakeven_prob = 1.0 / dec_odds
@@ -59,6 +125,10 @@ def build_result(combo, stake):
     return {
         "legs": list(combo),
         "decimal_odds": dec_odds,
+        "naive_decimal_odds": naive_dec_odds,
+        # True when same-game legs made the estimated SGP price lower than
+        # the multiplied price (see sgp_lift) -- the payout is an estimate.
+        "sgp_repriced": lift > 1.0001,
         "american_equivalent": odds_math.decimal_to_american(dec_odds),
         "payout": round(payout, 2),
         "stake": stake,
@@ -99,13 +169,13 @@ def search_near_target(legs, stake, target_payout, max_legs=MAX_LEGS_SEARCHED,
     widest = tolerances[-1]
     low_widest = target_payout * (1 - widest)
     high_widest = target_payout * (1 + widest)
-    pair_lifts = {}
+    pair_lifts, book_lifts = {}, {}
     all_combos = []
     for size in range(2, min(max_legs, len(legs)) + 1):
         for combo in itertools.combinations(legs, size):
             if not _combo_allowed(combo):
                 continue
-            dec_odds, payout, combined_prob = combo_stats(combo, stake, pair_lifts)
+            dec_odds, payout, combined_prob = combo_stats(combo, stake, pair_lifts, book_lifts)
             if low_widest <= payout <= high_widest:
                 all_combos.append((payout, combined_prob, combo))
 
@@ -116,7 +186,7 @@ def search_near_target(legs, stake, target_payout, max_legs=MAX_LEGS_SEARCHED,
         matches = [c for c in all_combos if low <= c[0] <= high]
         if not matches:
             continue
-        matches.sort(key=lambda c: c[1], reverse=True)
+        matches.sort(key=lambda c: c[1] * over_weight(c[2]), reverse=True)
         best_matches = matches
         best_payout, best_prob, _combo = matches[0]
         if best_prob >= MIN_PROB_VS_FAIR * stake / best_payout:
@@ -196,12 +266,20 @@ def pick_diverse(combos, num_results, max_shared_fraction=MAX_SHARED_LEG_FRACTIO
         allowance += 1
 
 
+def over_weight(combo):
+    """Ranking multiplier that tilts ticket choice toward Overs (see
+    OVER_TICKET_BOOST). Never changes the displayed probability."""
+    return OVER_TICKET_BOOST ** sum(1 for leg in combo if leg.get("side") == "Over")
+
+
 def rank_score(leg):
     """How strongly a leg deserves a place in the candidate pool: its edge
     (EV after vig), discounted for how erratic its stat category is, plus
     the priority credible research gives a leg it agrees with (or takes
-    from one it disagrees with) -- see game_cards.RESEARCH_PRIORITY."""
-    return leg["edge"] - 0.05 * leg.get("category_cv", 0.5) + leg.get("research_priority", 0.0)
+    from one it disagrees with) -- see game_cards.RESEARCH_PRIORITY -- plus
+    the small preference for Overs (OVER_RANK_BONUS)."""
+    over_bonus = OVER_RANK_BONUS if leg.get("side") == "Over" else 0.0
+    return leg["edge"] - 0.05 * leg.get("category_cv", 0.5) + leg.get("research_priority", 0.0) + over_bonus
 
 
 def find_best_odds_parlays(pool, stake, target_payout, num_results=3, pool_size=CROSS_GAME_CANDIDATE_POOL_SIZE):
@@ -214,7 +292,7 @@ def find_best_odds_parlays(pool, stake, target_payout, num_results=3, pool_size=
     (`has_same_game_legs`) since a sportsbook will reprice such a ticket in
     its own Same Game Parlay builder rather than honor the naive product of
     the individual prices."""
-    legs = _drop_redundant_favorite_bets(dedupe_best_per_bet(pool))
+    legs = _drop_redundant_favorite_bets(dedupe_best_per_bet([l for l in pool if parlay_eligible(l)]))
     legs = sorted(legs, key=rank_score, reverse=True)[:pool_size]
     matches = search_near_target(legs, stake, target_payout)
     return [build_result(combo, stake) for combo in pick_diverse(matches, num_results)]
@@ -232,7 +310,7 @@ def best_effort_combo(legs, stake, max_legs=MAX_LEGS_SEARCHED):
         for combo in itertools.combinations(legs, size):
             if not _combo_allowed(combo):
                 continue
-            dec_odds = odds_math.parlay_decimal_odds([leg["decimal_odds"] for leg in combo])
+            dec_odds = odds_math.parlay_decimal_odds([leg["decimal_odds"] for leg in combo]) / sgp_lift(combo)
             if best is None or dec_odds > best[0]:
                 best = (dec_odds, combo)
     return build_result(best[1], stake) if best else None

@@ -11,6 +11,7 @@ score alone (which is noisy: garbage-time points, defensive/special-teams
 TDs, etc. show up in the score but don't reflect true team strength).
 """
 import csv
+import re
 import io
 import requests
 from app.cache_utils import cache_get, cache_set, live_fetch_allowed
@@ -171,13 +172,62 @@ def build_player_index(current_season):
     prev_rows = _fetch_player_week_rows(current_season - 1)
     weighted = [(r, 1.0) for r in current_rows] + [(r, 0.5) for r in prev_rows]
 
-    index = {}
+    index = PlayerIndex()
     for row, w in weighted:
         name = row.get("player_display_name")
         if not name:
             continue
         index.setdefault(name, []).append((row, w))
     return index
+
+
+# Formal first names the odds feed uses where nflverse uses the short form
+# (seen: "Joshua Palmer" vs "Josh Palmer"). Only ever used for a match that
+# is unique after normalizing, so a wrong expansion can't merge two players.
+_FIRST_NAME_ALIASES = {"joshua": "josh", "christopher": "chris", "matthew": "matt", "nicholas": "nick"}
+
+
+def normalize_player_name(name):
+    """Lowercase, no punctuation, no generational suffix, short first name --
+    the odds feed and nflverse disagree on suffixes in both directions
+    ("Travis Etienne Jr." vs "Travis Etienne", "Deebo Samuel" vs "Deebo
+    Samuel Sr.")."""
+    name = re.sub(r"[.'’,-]", "", (name or "").lower())
+    name = re.sub(r"\b(jr|sr|ii|iii|iv|v)\b", "", name)
+    parts = name.split()
+    if parts:
+        parts[0] = _FIRST_NAME_ALIASES.get(parts[0], parts[0])
+    return " ".join(parts)
+
+
+class PlayerIndex(dict):
+    """{player_display_name: rows} that can also be looked up by a name
+    spelled the way the odds feed spells it -- see lookup_player. Plain
+    dict otherwise (iteration, .get, len are unchanged)."""
+
+    _normalized = None
+
+    def lookup(self, name):
+        rows = self.get(name)
+        if rows is not None or not name:
+            return rows
+        if self._normalized is None:
+            by_norm = {}
+            for display in self:
+                by_norm.setdefault(normalize_player_name(display), []).append(display)
+            self._normalized = by_norm
+        matches = self._normalized.get(normalize_player_name(name), [])
+        return self[matches[0]] if len(matches) == 1 else None
+
+
+def lookup_player(index, name):
+    """Rows for `name` from a build_player_index result: exact display name
+    first, then a unique normalized match. Before this, every odds-feed name
+    spelled differently from nflverse was silently skipped -- no prop
+    candidates for those players and their tracked bets could never settle
+    (19 player-markets in the 2026 weeks 2-4 boards)."""
+    lookup = getattr(index, "lookup", None)
+    return lookup(name) if lookup else index.get(name)
 
 
 def compute_allowed_yardage(current_season):

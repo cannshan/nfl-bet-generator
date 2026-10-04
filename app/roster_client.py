@@ -9,6 +9,7 @@ rows, so nflverse-derived lookups kept attributing him to Miami). Anywhere
 this app needs to know a player's current team, prefer this source over a
 stat row's 'team' field.
 """
+from concurrent.futures import ThreadPoolExecutor
 import requests
 from app.config import ESPN_API_BASE
 from app.cache_utils import cache_get, cache_set, live_fetch_allowed
@@ -16,6 +17,7 @@ from app.espn_client import HEADERS
 
 TIMEOUT = 15
 CACHE_TTL_SECONDS = 12 * 60 * 60
+HEADSHOT_TTL_SECONDS = 7 * 24 * 60 * 60
 
 
 def get_current_rosters():
@@ -26,31 +28,57 @@ def get_current_rosters():
         return cached
     if not live_fetch_allowed():
         return {}
+    return _fetch_rosters()[0]
 
+
+def get_headshots():
+    """{player_full_name: ESPN headshot image URL}, collected by the same
+    roster pass as get_current_rosters() (free -- ESPN, no odds quota).
+    Photos rarely change, so a week-old copy is fine."""
+    cached = cache_get("espn_headshots", HEADSHOT_TTL_SECONDS)
+    if cached is not None:
+        return cached
+    if not live_fetch_allowed():
+        return {}
+    return _fetch_rosters()[1]
+
+
+def _fetch_rosters():
+    """One pass over every team's ESPN roster; caches and returns
+    (rosters, headshots)."""
     try:
         resp = requests.get(f"{ESPN_API_BASE}/teams", params={"limit": 40}, timeout=TIMEOUT, headers=HEADERS)
         resp.raise_for_status()
         teams = resp.json()["sports"][0]["leagues"][0]["teams"]
     except (requests.RequestException, KeyError, IndexError):
-        return {}
+        return {}, {}
 
-    rosters = {}
-    for entry in teams:
+    def _roster(entry):
         team = entry["team"]
         try:
             resp = requests.get(f"{ESPN_API_BASE}/teams/{team['id']}/roster", timeout=TIMEOUT, headers=HEADERS)
             resp.raise_for_status()
-            data = resp.json()
+            return team["displayName"], resp.json()
         except requests.RequestException:
-            continue
-        for group in data.get("athletes", []):
-            for athlete in group.get("items", []):
-                name = athlete.get("fullName")
-                if name:
-                    rosters[name] = team["displayName"]
+            return team["displayName"], {}
+
+    rosters, headshots = {}, {}
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for team_name, data in pool.map(_roster, teams):
+            for group in data.get("athletes", []):
+                for athlete in group.get("items", []):
+                    name = athlete.get("fullName")
+                    if not name:
+                        continue
+                    rosters[name] = team_name
+                    href = (athlete.get("headshot") or {}).get("href")
+                    if href:
+                        headshots[name] = href
 
     cache_set("espn_current_rosters", rosters)
-    return rosters
+    if headshots:
+        cache_set("espn_headshots", headshots)
+    return rosters, headshots
 
 
 def get_qb_depth_charts():

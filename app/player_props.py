@@ -53,7 +53,7 @@ import math
 import re
 from concurrent.futures import ThreadPoolExecutor
 from statistics import NormalDist, median
-from app import odds_client, nflverse_client, ratings, odds_math, espn_client, injury_client, weather_client, roster_client
+from app import odds_client, nflverse_client, ratings, odds_math, espn_client, injury_client, weather_client, roster_client, formatting
 
 # ESPN's comments are written like news blurbs ("X said Wednesday that...,
 # Reporter Name of Outlet reports.") -- strip the trailing attribution clause
@@ -424,6 +424,120 @@ def _prob_under(point, center, sigma, log_space):
     return ratings.normal_cdf((x - center) / sigma)
 
 
+# --- The pricing math below is split out of get_player_prop_candidates as
+# pure functions (no I/O, no module state beyond the constants) so that
+# scripts/backtest_prop_blend.py can replay the EXACT production math on
+# historical prop boards with as-of data, instead of a re-implementation
+# that could quietly drift from what the app actually does. Every tunable
+# defaults to its module constant, resolved at call time, so the backtest
+# can pass alternatives while production passes nothing.
+
+def _league_average_allowed(allowed):
+    """League-wide average pass/rush yards allowed per game -- the baseline
+    _matchup_factor compares one defense against. {} with no defense data."""
+    league_avg = {}
+    if allowed:
+        league_avg["pass"] = sum(v["pass"] for v in allowed.values()) / len(allowed)
+        league_avg["rush"] = sum(v["rush"] for v in allowed.values()) / len(allowed)
+    return league_avg
+
+
+def _matchup_factor(field, category, opponent_full, allowed, league_avg):
+    """Opponent-defense multiplier for one stat (see MATCHUP_SHRINK): only
+    yardage fields, regressed toward 1.0 and clamped. 1.0 when the field
+    isn't yardage or there's no data for this defense."""
+    if field in YARDAGE_FIELDS and opponent_full in allowed and league_avg.get(category):
+        raw_ratio = allowed[opponent_full][category] / league_avg[category]
+        factor = 1 + MATCHUP_SHRINK * (raw_ratio - 1)
+        return max(MATCHUP_ADJUSTMENT_CLAMP[0], min(MATCHUP_ADJUSTMENT_CLAMP[1], factor))
+    return 1.0
+
+
+def _history_projection(rows, field, category, matchup_factor=1.0, questionable=False,
+                        return_risk=False, qb_out=False, defense_factor=None, weather_factor=None):
+    """The player's own game-log projection for one stat: (model_center,
+    sigma, log_space, mean), or None for too small a sample.
+
+    `rows` are already recency-weighted (_apply_recency). Every adjustment is
+    a multiplicative factor on the projected stat, collected into one
+    total_factor (applied as an additive log shift for the log-space
+    fields), and every context factor defaults to neutral -- the backtest
+    can only reconstruct the matchup (as-of yards allowed) and the role
+    trend (computed here from `rows`), not the injury report, QB depth chart
+    or weather forecast as they stood before a past game. The factors are
+    multiplied in a fixed order so production's floating-point result is
+    identical to what the inline version of this code produced.
+
+    `mean` is the raw history mean BEFORE any factor -- _market_consensus
+    compares the market center against it to decide whether the player's
+    role has outgrown his historical dispersion."""
+    log_space = field in RECEIVING_FIELDS
+    if log_space:
+        mean, std = _weighted_mean_std_log(rows, field)
+        if mean is None or not std:
+            return None
+        sigma = std
+    else:
+        mean, std = _weighted_mean_std(rows, field)
+        if mean is None:
+            return None
+        sigma = max(std, mean * 0.2, 1.0)  # floor: avoid overconfident small-sample variance
+
+    total_factor = 1.0
+    if questionable:
+        total_factor *= injury_client.QUESTIONABLE_DISCOUNT
+    if return_risk:
+        total_factor *= MAJOR_INJURY_RETURN_DISCOUNT[category]
+    total_factor *= matchup_factor
+    if log_space:
+        total_factor *= _role_trend_factor(rows)
+        if qb_out:
+            total_factor *= QB_OUT_RECEIVING_DISCOUNT
+    if defense_factor:
+        total_factor *= defense_factor
+    if weather_factor is not None:
+        total_factor *= weather_factor
+
+    total_factor = max(total_factor, 0.01)
+    model_center = mean + math.log(total_factor) if log_space else mean * total_factor
+    return model_center, sigma, log_space, mean
+
+
+def _market_consensus(quotes, sigma, log_space, mean, scale_sigma=None):
+    """(market_center, sigma) from every book's devigged quote -- the
+    history sigma widened per SIGMA_SCALES_WITH_MARKET when the market
+    center sits above the player's history mean (and the center re-solved
+    with the wider sigma, since off-center quotes translate through it).
+    None when there are no quotes."""
+    if scale_sigma is None:
+        scale_sigma = SIGMA_SCALES_WITH_MARKET
+    market_center = _market_center(quotes, sigma, log_space)
+    if market_center is None:
+        return None
+    if scale_sigma and not log_space and mean > 0 and market_center > mean:
+        sigma *= market_center / mean
+        market_center = _market_center(quotes, sigma, log_space)
+    return market_center, sigma
+
+
+def _blend_center(model_center, market_center, sigma, weight=None, cap_sigmas=None,
+                  disagreement_shrink=True):
+    """The final distribution center: the market consensus tilted toward the
+    history projection by `weight` (MODEL_WEIGHT_VS_MARKET), shrunk as the
+    two disagree more when `disagreement_shrink` (production's form; False
+    = a fixed weight, kept for the backtest's comparison), and capped at
+    `cap_sigmas` (MAX_MODEL_TILT_SIGMAS) of sigma -- math.inf for no cap."""
+    if weight is None:
+        weight = MODEL_WEIGHT_VS_MARKET
+    if cap_sigmas is None:
+        cap_sigmas = MAX_MODEL_TILT_SIGMAS
+    gap = model_center - market_center
+    tilt_weight = weight / (1 + abs(gap) / sigma) if disagreement_shrink else weight
+    tilt = tilt_weight * gap
+    tilt = max(-cap_sigmas * sigma, min(cap_sigmas * sigma, tilt))
+    return market_center + tilt
+
+
 def _fetch_event_odds_and_weather(event, markets):
     """One event's props + weather -- independent of every other event, so
     get_player_prop_candidates runs this concurrently across all events
@@ -475,12 +589,11 @@ def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None, event_f
         team for team, qb_list in qb_depth_charts.items()
         if qb_list and injuries.get(qb_list[0], {}).get("status") in injury_client.EXCLUDE_STATUSES
     }
-    league_avg = {}
-    if allowed:
-        league_avg["pass"] = sum(v["pass"] for v in allowed.values()) / len(allowed)
-        league_avg["rush"] = sum(v["rush"] for v in allowed.values()) / len(allowed)
+    league_avg = _league_average_allowed(allowed)
 
-    events = odds_client.get_events()
+    # Pregame only: the feed keeps a started game listed with in-play prices,
+    # which the model cannot price -- and each one would cost a props call.
+    events = [e for e in odds_client.get_events() if not formatting.has_kicked_off(e.get("commence_time"))]
     if event_filter:
         events = [e for e in events if (e.get("home_team"), e.get("away_team")) in event_filter]
     if max_events:
@@ -513,7 +626,7 @@ def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None, event_f
 
         for (mkey, player), sides_by_point in offers.items():
             field, label, category = MARKET_CONFIG[mkey]
-            raw_rows = player_index.get(player)
+            raw_rows = nflverse_client.lookup_player(player_index, player)
             if not raw_rows:
                 continue
             player_quotes = quotes.get((mkey, player))
@@ -527,17 +640,6 @@ def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None, event_f
                 continue
 
             rows = _apply_recency(raw_rows)
-            log_space = field in RECEIVING_FIELDS
-            if log_space:
-                mean, std = _weighted_mean_std_log(rows, field)
-                if mean is None or not std:
-                    continue
-                sigma = std
-            else:
-                mean, std = _weighted_mean_std(rows, field)
-                if mean is None:
-                    continue
-                sigma = max(std, mean * 0.2, 1.0)  # floor: avoid overconfident small-sample variance
 
             # Prefer the current-roster team over the stat row's own 'team'
             # field: that field only reflects games actually played, so a
@@ -552,50 +654,28 @@ def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None, event_f
                 continue
             opponent_full = away if player_team_full == home else home
 
-            # --- history projection: every adjustment is a multiplicative
-            # factor on the projected stat, collected into one total_factor
-            # (applied as an additive log shift for the log-space fields).
-            total_factor = 1.0
-            if injury and injury["status"] == "Questionable":
-                total_factor *= injury_client.QUESTIONABLE_DISCOUNT
-
+            # --- history projection (see _history_projection for how the
+            # context factors combine).
             return_risk = _mentions_major_injury_return(injury)
-            if return_risk:
-                total_factor *= MAJOR_INJURY_RETURN_DISCOUNT[category]
-
-            matchup_factor = 1.0
-            if field in YARDAGE_FIELDS and opponent_full in allowed and league_avg.get(category):
-                raw_ratio = allowed[opponent_full][category] / league_avg[category]
-                matchup_factor = 1 + MATCHUP_SHRINK * (raw_ratio - 1)
-                matchup_factor = max(MATCHUP_ADJUSTMENT_CLAMP[0], min(MATCHUP_ADJUSTMENT_CLAMP[1], matchup_factor))
-            total_factor *= matchup_factor
-
-            if log_space:
-                total_factor *= _role_trend_factor(rows)
-                if player_team_full in qb_out_teams:
-                    total_factor *= QB_OUT_RECEIVING_DISCOUNT
-
-            if opponent_full and defensive_bonus.get(opponent_full):
-                total_factor *= defensive_bonus[opponent_full]
-
-            if weather:
-                total_factor *= weather_client.adjustment_factor(weather, category)
-
-            total_factor = max(total_factor, 0.01)
-            model_center = mean + math.log(total_factor) if log_space else mean * total_factor
+            projection = _history_projection(
+                rows, field, category,
+                matchup_factor=_matchup_factor(field, category, opponent_full, allowed, league_avg),
+                questionable=bool(injury and injury["status"] == "Questionable"),
+                return_risk=return_risk,
+                qb_out=player_team_full in qb_out_teams,
+                defense_factor=defensive_bonus.get(opponent_full) if opponent_full else None,
+                weather_factor=weather_client.adjustment_factor(weather, category) if weather else None,
+            )
+            if projection is None:
+                continue
+            model_center, sigma, log_space, mean = projection
 
             # --- market consensus, then the small capped tilt toward the model.
-            market_center = _market_center(player_quotes, sigma, log_space)
-            if market_center is None:
+            consensus = _market_consensus(player_quotes, sigma, log_space, mean)
+            if consensus is None:
                 continue
-            if SIGMA_SCALES_WITH_MARKET and not log_space and mean > 0 and market_center > mean:
-                sigma *= market_center / mean
-                market_center = _market_center(player_quotes, sigma, log_space)
-            gap = model_center - market_center
-            tilt_weight = MODEL_WEIGHT_VS_MARKET / (1 + abs(gap) / sigma)
-            tilt = tilt_weight * gap
-            tilt = max(-MAX_MODEL_TILT_SIGMAS * sigma, min(MAX_MODEL_TILT_SIGMAS * sigma, tilt))
-            blended_center = market_center + tilt
+            market_center, sigma = consensus
+            blended_center = _blend_center(model_center, market_center, sigma)
 
             injury_note, injury_flag = None, None
             if injury and injury["status"] == "Questionable":
@@ -652,6 +732,11 @@ def get_player_prop_candidates(markets=DEFAULT_MARKETS, max_events=None, event_f
                 category_cv=reliability.get(field, 0.5),
                 odds_age_seconds=odds_age,
                 model_median=model_median, market_median=market_median,
+                # The market distribution itself, in model space (log(x+1)
+                # when log_space) -- enough to re-price this leg's fair
+                # probability at ANY line via _prob_under, e.g. a closing
+                # line that has moved off the one suggested.
+                market_center=round(market_center, 4), sigma=round(sigma, 4), log_space=log_space,
             )
             market_label = f"Player Prop: {label}"
 

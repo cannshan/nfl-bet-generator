@@ -12,6 +12,7 @@
     <nav class="tabs">
       <a href="/" class="tab">Bets</a>
       <a href="/track-record" class="tab active">Track Record</a>
+      <a href="/leahs-bets" class="tab">Leah's Bets</a>
     </nav>
   </header>
   <p class="meta">
@@ -56,6 +57,14 @@
       check back after more games have been played. (Void/push bets: {{ record.void }}, not counted above.)
     </p>
   {% endif %}
+  {% if record.in_play_excluded %}
+    <p class="meta">
+      {{ record.in_play_excluded }} suggestion{{ 's' if record.in_play_excluded != 1 }} logged after
+      {{ 'its' if record.in_play_excluded == 1 else 'their' }} game had already kicked off (live, in-game prices)
+      {{ 'is' if record.in_play_excluded == 1 else 'are' }} left out of every number on this page — those prices
+      already knew part of the result.
+    </p>
+  {% endif %}
 
   <section>
     <h2>Closing line value (CLV)</h2>
@@ -69,20 +78,44 @@
     <section class="stat-row">
       <div class="stat-tile">
         <div class="stat-value">{{ record.clv_n }}</div>
-        <div class="stat-label">Bets with a captured closing line</div>
+        <div class="stat-label">Bets that closed at the same line</div>
       </div>
       <div class="stat-tile">
         <div class="stat-value">{% if record.positive_clv_pct is not none %}{{ record.positive_clv_pct|round(1) }}%{% else %}—{% endif %}</div>
-        <div class="stat-label">% beating the closing line</div>
+        <div class="stat-label">% beating the closing price</div>
       </div>
       <div class="stat-tile">
         <div class="stat-value">{% if record.avg_clv_pct is not none %}{{ '%+.2f'|format(record.avg_clv_pct) }}%{% else %}—{% endif %}</div>
         <div class="stat-label">Avg. CLV (price vs. closing)</div>
       </div>
+      <div class="stat-tile">
+        <div class="stat-value">{% if record.avg_closing_ev_pts is not none %}{{ '%+.2f'|format(record.avg_closing_ev_pts) }}{% else %}—{% endif %}</div>
+        <div class="stat-label">Avg. closing EV (pts, {{ record.closing_ev_n }} bets)</div>
+      </div>
     </section>
+    <p class="meta">
+      <strong>Closing EV</strong> is the market's closing fair chance for our exact bet (our line, our side, vig
+      removed across every book) minus the breakeven chance of the price we took, in percentage points.
+      Above zero means the price we were shown was better than fair by the time the market had all its
+      information — with a small sample, it's the most reliable sign of whether the picks were actually good.
+      {% if record.positive_closing_ev_pct is not none %}{{ record.positive_closing_ev_pct|round(1) }}% of bets
+      had positive closing EV.{% else %}None captured yet: it fills in once the database has the closing_fair_prob
+      column (2026-10-04 migration in supabase_setup.sql), from each bet's last refresh before kickoff.{% endif %}
+      {% if record.moved_n %}
+      {{ record.moved_n }} bet{{ 's' if record.moved_n != 1 }} closed at a different line than we took, so
+      {{ 'its' if record.moved_n == 1 else 'their' }} price isn't comparable and {{ 'is' if record.moved_n == 1 else 'are' }}
+      left out of the CLV average{% if record.moved_our_way_pct is not none %}; the line moved toward our side on
+      {{ record.moved_our_way_pct|round(1) }}% of them{% endif %}.
+      {% endif %}
+      {% if record.same_refresh_close_n %}
+      {{ record.same_refresh_close_n }} more had no price captured after the refresh that suggested
+      {{ 'it' if record.same_refresh_close_n == 1 else 'them' }} (the game started before the app was refreshed
+      again), so there's no closing price to compare against.
+      {% endif %}
+    </p>
     {% if not record.clv_confident %}
     <p class="meta">
-      ⚠️ Only {{ record.clv_n }} bets have a captured closing line — sharp-betting convention wants
+      ⚠️ Only {{ record.clv_n }} bets have a comparable closing price — sharp-betting convention wants
       200+ before CLV numbers mean much, and 500+ for real confidence. Treat this as an early read, not
       a verdict yet.
     </p>
@@ -90,7 +123,7 @@
     {% if record.clv_recent %}
     <table>
       <thead>
-        <tr><th>Matchup</th><th>Pick</th><th>Our price</th><th>Closing price</th><th>CLV</th></tr>
+        <tr><th>Matchup</th><th>Pick</th><th>Our price</th><th>Closing price</th><th>CLV</th><th>Closing EV</th></tr>
       </thead>
       <tbody>
         {% for r in record.clv_recent %}
@@ -99,13 +132,81 @@
           <td>{{ r.market }}: {{ r.selection }}</td>
           <td>{{ '%+d'|format(r.american_odds) }}</td>
           <td>{{ '%+d'|format(r.closing_american_odds) }}{% if r.closing_selection != r.selection %} ({{ r.closing_selection }}){% endif %}</td>
+          {% if r.clv_pct is not none %}
           <td class="{% if r.clv_pct > 0 %}edge-cell{% elif r.clv_pct < 0 %}edge-cell-bad{% endif %}">{{ '%+.1f'|format(r.clv_pct) }}%</td>
+          {% else %}
+          <td>line moved</td>
+          {% endif %}
+          {% if r.closing_ev_pts is not none %}
+          <td class="{% if r.closing_ev_pts > 0 %}edge-cell{% elif r.closing_ev_pts < 0 %}edge-cell-bad{% endif %}">{{ '%+.1f'|format(r.closing_ev_pts) }}</td>
+          {% else %}
+          <td>—</td>
+          {% endif %}
         </tr>
         {% endfor %}
       </tbody>
     </table>
     {% endif %}
   </section>
+
+  {% if record.tickets is not none %}
+  {% set t = record.tickets %}
+  <section>
+    <h2>Whole tickets</h2>
+    <p class="meta">
+      The parlays themselves, as shown — graded the way a sportsbook would: lost as soon as one leg loses,
+      a void (push or player didn't play) leg drops out and the ticket pays on the rest. This is the
+      honest check on the ticket's shown hit chance, which already accounts for correlated same-game legs.
+    </p>
+    <section class="stat-row">
+      <div class="stat-tile">
+        <div class="stat-value">{{ t.settled }}</div>
+        <div class="stat-label">Settled tickets ({{ t.pending }} pending{% if t.void %}, {{ t.void }} void{% endif %})</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-value">{{ t.hits }}</div>
+        <div class="stat-label">Hits{% if t.expected_hits is not none %} (shown odds expected {{ '%.2f'|format(t.expected_hits) }}){% endif %}</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-value">{% if t.avg_shown_prob is not none %}{{ '%.2f'|format(t.avg_shown_prob * 100) }}%{% else %}—{% endif %}</div>
+        <div class="stat-label">Avg. shown hit chance</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-value">{% if t.actual_hit_rate is not none %}{{ '%.2f'|format(t.actual_hit_rate * 100) }}%{% else %}—{% endif %}</div>
+        <div class="stat-label">Actual hit rate</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-value">{% if t.roi_pct is not none %}{{ t.roi_pct|round(1) }}%{% else %}—{% endif %}</div>
+        <div class="stat-label">ROI at the shown stake</div>
+      </div>
+    </section>
+    {% if not t.confident %}
+    <p class="meta">
+      ⚠️ A long-shot ticket around 0.5% is expected to hit about once in 200 tries even if every number is
+      right, so {{ t.settled }} settled ticket{{ 's' if t.settled != 1 }} can't confirm or refute anything yet —
+      compare "hits" with "expected" rather than the two percentages.
+    </p>
+    {% endif %}
+    {% if t.recent %}
+    <table>
+      <thead>
+        <tr><th>First kickoff</th><th>Legs</th><th>Payout</th><th>Shown hit chance</th><th>Result</th></tr>
+      </thead>
+      <tbody>
+        {% for r in t.recent %}
+        <tr>
+          <td>{{ r.first_commence_time|kickoff_et or '—' }}</td>
+          <td>{{ r.num_legs }}</td>
+          <td>${{ '%.2f'|format(r.payout or 0) }}</td>
+          <td>{% if r.combined_prob is not none %}{{ '%.2f'|format(r.combined_prob * 100) }}%{% else %}—{% endif %}</td>
+          <td class="{% if r.status == 'hit' %}edge-cell{% elif r.status == 'miss' %}edge-cell-bad{% endif %}">{{ r.status|capitalize }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </section>
+  {% endif %}
 
   {% if record.buckets %}
   <section>
@@ -164,7 +265,8 @@
   <footer>
     Settlement uses ESPN's final scores (game-level bets) and nflverse's final box-score stats
     (player props), checked automatically starting a few hours after kickoff. A bet with no data
-    available yet stays "pending" and is retried on your next visit.
+    available yet stays "pending" and is retried on your next visit. A player prop on someone who
+    didn't play is void, as sportsbooks grade it.
   </footer>
 </body>
 </html>

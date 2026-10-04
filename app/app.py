@@ -1,13 +1,16 @@
+import datetime as dt
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, render_template, request, jsonify, redirect, url_for
 from app.config import DEFAULT_STAKE, DEFAULT_TARGET_PAYOUT, BOOKMAKER_KEY
-from app import value_finder, odds_client, game_cards, parlay_builder, expert_insight, injury_client, tracking, cache_utils, formatting
+from app import value_finder, odds_client, game_cards, parlay_builder, expert_insight, injury_client, tracking, cache_utils, formatting, hair_bets
 
 
 def _coherent(pool):
-    """Legs whose side doesn't contradict the expert read shown on them
-    (see game_cards._apply_expert_insight)."""
-    return [leg for leg in pool if not leg.get("contradicts_expert")]
+    """Legs that may go on a ticket: break-even or better at the offered
+    price, not contradicting the expert read shown on them (see
+    game_cards._apply_expert_insight), and pregame -- see
+    parlay_builder.parlay_eligible."""
+    return [leg for leg in pool if parlay_builder.parlay_eligible(leg)]
 
 # static_folder points at the repo-root public/ directory (Vercel's
 # convention -- it serves public/** from its CDN and Flask's own
@@ -56,6 +59,14 @@ def _record_suggestions(best_odds_parlays, season, week):
     calls = [(parlay["legs"], f"best_odds_parlay_{tracking.MODEL_VERSION}") for parlay in best_odds_parlays]
     if not calls:
         return
+    # The whole tickets too, not just their legs -- the $5 -> target parlay
+    # is the actual product, and per-leg rows can't say how it did.
+    log_tickets = getattr(tracking, "log_tickets", None)
+    if log_tickets:
+        try:
+            log_tickets(best_odds_parlays, f"best_odds_parlay_{tracking.MODEL_VERSION}")
+        except Exception:
+            pass
 
     def _log(item):
         legs, section = item
@@ -278,6 +289,70 @@ def track_record():
     return render_template("track_record.html", record=tracking.get_track_record())
 
 
+@app.route("/leahs-bets")
+def leahs_bets():
+    """Props on players with notable hair (app/hair_bets.py). Cache-only,
+    like every plain page view -- Refresh Bets on the main tab loads lines."""
+    stake = request.args.get("stake", type=float) or DEFAULT_STAKE
+    cache_utils.set_mode("passive")
+    picks, top_hair, parlay, error = hair_bets.get_leahs_bets(stake)
+    if error and "No historical game data" in error:
+        error = None  # nothing refreshed yet on this deployment
+    return render_template(
+        "leahs_bets.html", picks=picks, top_hair=top_hair, parlay=parlay, error=error, stake=stake,
+    )
+
+
+# Closing-line capture: how many minutes before kickoff a game's odds are
+# re-pulled so the tracked bets on it get a genuine closing price. Without
+# this the "closing line" was just whatever the last manual refresh happened
+# to see (113 of 156 CLV comparisons came out identical to the offer).
+CLOSING_CAPTURE_WINDOW_MINUTES = 45
+
+
+def capture_closing_lines_now(window_minutes=CLOSING_CAPTURE_WINDOW_MINUTES):
+    """Re-pulls odds for ONLY the games that (a) kick off within the window
+    and (b) have pending tracked bets, then records closing prices for those
+    bets. Costs the game-odds call plus one props call per such game (a few
+    credits each) and nothing at all when no tracked game is about to start.
+    Caller must set cache_utils mode to 'active'."""
+    now = dt.datetime.now(dt.timezone.utc)
+    soon = now + dt.timedelta(minutes=window_minutes)
+    try:
+        rows = (
+            tracking._sb().table(tracking.TABLE).select("home_team,away_team,commence_time")
+            .eq("status", "pending")
+            .gt("commence_time", now.strftime("%Y-%m-%dT%H:%M:%SZ"))
+            .lte("commence_time", soon.strftime("%Y-%m-%dT%H:%M:%SZ"))
+            .execute().data
+        )
+    except Exception as e:
+        return {"games": [], "error": f"Couldn't read pending bets: {e}"}
+    event_filter = {(r["home_team"], r["away_team"]) for r in rows if r.get("home_team") and r.get("away_team")}
+    games = sorted(f"{away} @ {home}" for home, away in event_filter)
+    if not event_filter:
+        return {"games": [], "captured": False}
+    try:
+        _value_bets, pool, _meta = value_finder.get_value_bets_and_pool(include_props=True, event_filter=event_filter)
+        tracking.capture_closing_lines(pool)
+    except Exception as e:
+        return {"games": games, "error": str(e)}
+    return {"games": games, "captured": True}
+
+
+@app.route("/capture-closing-lines")
+def capture_closing_lines():
+    """Safe to call any time: spends odds credits only when a game with
+    pending tracked bets kicks off within CLOSING_CAPTURE_WINDOW_MINUTES.
+    run.py calls it on a timer while the local server is up."""
+    cache_utils.set_mode("active")
+    try:
+        result = capture_closing_lines_now()
+    finally:
+        cache_utils.set_mode("passive")
+    return jsonify(result)
+
+
 @app.route("/refresh-settlements")
 def refresh_settlements():
     """Checks pending predictions against real results -- free (ESPN via
@@ -387,7 +462,7 @@ def redo_leg():
             return (-1, -1.0)
         dec_odds, payout, joint = parlay_builder.combo_stats(combo, stake)
         near_target = 1 if abs(payout - target) <= 0.5 * target else 0
-        return (near_target, joint)
+        return (near_target, joint * parlay_builder.over_weight([leg]))
 
     score = in_context if others else parlay_builder.rank_score
 
@@ -438,6 +513,7 @@ def parlay_stats():
         "breakeven_prob": result["breakeven_prob"],
         "ev_pct": result["ev_pct"],
         "has_same_game_legs": result["has_same_game_legs"],
+        "sgp_repriced": result["sgp_repriced"],
     })
 
 

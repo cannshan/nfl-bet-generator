@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Its Givin Ashley Webb</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+{% import "_leg.html" as legs %}
+
+  <header>
+    <h1>♿ Its Givin Ashley Webb</h1>
+    <nav class="tabs">
+      <a href="/" class="tab">Bets</a>
+      <a href="/track-record" class="tab">Track Record</a>
+      <a href="/leahs-bets" class="tab active">Leah's Bets</a>
+    </nav>
+  </header>
+  <p class="meta">
+    💇 Props only on regulars with wacky or cool hair. A player only appears if the books have a
+    line on him this week and he's played at least 3 games this season. Uses the odds already loaded — hit
+    <a href="/">Refresh Bets</a> on the Bets tab for newer lines.
+  </p>
+
+  {% if error %}
+    <div class="error"><strong>Couldn't load live data:</strong> {{ error }}</div>
+  {% endif %}
+
+  {% set parlay_photos = {} %}
+  {% for p in picks %}{% if p.photo %}{% set _ = parlay_photos.update({p.leg.player: p.photo}) %}{% endif %}{% endfor %}
+  {% if parlay %}
+  <section>
+    <h2>Leah's Hair Parlay (${{ stake }})</h2>
+    <div class="parlay-grid">
+      <div class="parlay-card no-redo">
+        <div class="card-header">
+          <div class="card-title-wrap">
+            <h3 class="card-title">{{ parlay.num_legs }}-Leg Hair Parlay</h3>
+            {% if parlay.kickoff_et %}<div class="card-kickoff">🕒 {{ parlay.kickoff_et }}{% if parlay.spans_multiple_kickoffs %} (first leg){% endif %}</div>{% endif %}
+          </div>
+          <div class="payout-badge">
+            <span class="payout">${{ parlay.payout }}</span>
+            <span class="prob">{{ (parlay.combined_prob * 100)|round(2) }}% to hit · fair {{ (parlay.breakeven_prob * 100)|round(2) }}%</span>
+            <span class="prob ev {% if parlay.ev_pct >= 0 %}ev-pos{% else %}ev-neg{% endif %}">EV {{ '%+.0f'|format(parlay.ev_pct) }}%</span>
+          </div>
+        </div>
+        <div class="hair-lineup">
+          {% for leg in parlay.legs %}{% if parlay_photos.get(leg.player) %}<img class="hair-thumb" src="{{ parlay_photos[leg.player] }}" alt="{{ leg.player }}" title="{{ leg.player }}" loading="lazy">{% endif %}{% endfor %}
+        </div>
+        <ul>
+          {% for leg in parlay.legs %}
+            {{ legs.render_leg(leg, show_matchup=True) }}
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  {% if top_hair %}
+  <section>
+    <h2>Top {{ top_hair|length }} Hair Styles</h2>
+    <div class="parlay-grid">
+      {% for p in top_hair %}
+      <div class="parlay-card no-redo">
+        {% if p.photo %}<img class="hair-photo" src="{{ p.photo }}" alt="{{ p.name }}" loading="lazy">{% endif %}
+        <div class="card-header">
+          <div class="card-title-wrap">
+            <h3 class="card-title">{{ p.emoji }} {{ p.name }}</h3>
+            <div class="hair-tag">#{{ loop.index }} · {{ p.look }} · craziness {{ p.craziness }}/10</div>
+          </div>
+          <div class="payout-badge">
+            <span class="prob">{{ (p.leg.model_prob * 100)|round(0)|int }}% to hit</span>
+          </div>
+        </div>
+        <ul>{{ legs.render_leg(p.leg, show_matchup=True) }}</ul>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% elif not error %}
+    <p class="meta">No hair-worthy players have lines in the loaded odds yet — click Refresh Bets on the
+      <a href="/">Bets</a> tab (with player props on) to pull this week's props.</p>
+  {% endif %}
+</body>
+</html>
